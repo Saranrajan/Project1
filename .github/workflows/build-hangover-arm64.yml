@@ -1,0 +1,100 @@
+name: Build Hangover ARM64 Wine Runtime
+
+on:
+  push:
+    branches:
+      - 'feature/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-arm64-wine:
+    name: Build Hangover ARM64 Wine runtime
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout experiment repository
+        uses: actions/checkout@v4
+
+      - name: Initialize Hangover submodule
+        run: git submodule update --init --recursive
+
+      - name: Install Wine build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources || true
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            clang \
+            lld \
+            flex \
+            bison \
+            gettext \
+            pkg-config \
+            python3 \
+            curl \
+            jq \
+            unzip \
+            zstd \
+            dpkg-dev \
+            fakeroot
+          sudo apt-get build-dep -y wine || true
+
+      - name: Download AArch64 llvm-mingw host toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          asset_url="$(curl -fsSL https://api.github.com/repos/mstorsjo/llvm-mingw/releases/latest | jq -r '.assets[] | select(.name | test("ucrt-aarch64\\.zip$")) | .browser_download_url' | head -n1)"
+          test -n "${asset_url}"
+          mkdir -p toolchains
+          curl -fL --retry 3 "${asset_url}" -o toolchains/llvm-mingw-aarch64.zip
+          unzip -q toolchains/llvm-mingw-aarch64.zip -d toolchains
+          echo "LLVM_MINGW_BIN=$(find "$PWD/toolchains" -type d -path '*/bin' | head -n1)" >> "$GITHUB_ENV"
+
+      - name: Configure Hangover Wine
+        working-directory: third_party/hangover/wine
+        env:
+          PATH: ${{ env.LLVM_MINGW_BIN }}:${{ env.PATH }}
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          cd build
+          ../configure \
+            --disable-tests \
+            --with-mingw=clang \
+            --enable-archs=arm64ec,aarch64,i386
+
+      - name: Build Hangover Wine
+        working-directory: third_party/hangover/wine/build
+        env:
+          PATH: ${{ env.LLVM_MINGW_BIN }}:${{ env.PATH }}
+        run: make -j"$(nproc)"
+
+      - name: Install runtime into staging root
+        working-directory: third_party/hangover/wine/build
+        env:
+          PATH: ${{ env.LLVM_MINGW_BIN }}:${{ env.PATH }}
+        run: |
+          set -euo pipefail
+          rm -rf "$GITHUB_WORKSPACE/artifacts/rootfs"
+          mkdir -p "$GITHUB_WORKSPACE/artifacts/rootfs"
+          make DESTDIR="$GITHUB_WORKSPACE/artifacts/rootfs" install
+
+      - name: Package runtime
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          tar --zstd -C artifacts/rootfs -cf artifacts/hangover-arm64-wine-root.tar.zst .
+          sha256sum artifacts/hangover-arm64-wine-root.tar.zst > artifacts/hangover-arm64-wine-root.sha256
+
+      - name: Upload ARM64 Wine runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: hangover-arm64-wine-runtime
+          path: |
+            artifacts/hangover-arm64-wine-root.tar.zst
+            artifacts/hangover-arm64-wine-root.sha256
+          retention-days: 14
