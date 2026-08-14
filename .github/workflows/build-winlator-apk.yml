@@ -33,12 +33,15 @@ jobs:
           java-version: '11'
           cache: gradle
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK/NDK/CMake
+      - name: Configure hosted Android SDK
         shell: bash
         run: |
+          set -euo pipefail
+          export ANDROID_SDK_ROOT="${ANDROID_HOME}"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=${ANDROID_HOME}" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=${ANDROID_SDK_ROOT}/ndk/24.0.8215888" >> "$GITHUB_ENV"
+          echo "PATH=${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin:${ANDROID_SDK_ROOT}/platform-tools:${PATH}" >> "$GITHUB_ENV"
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager \
             'platform-tools' \
@@ -54,10 +57,16 @@ jobs:
       - name: Apply Project1 ARM64 dispatcher overlay
         run: bash scripts/apply-winlator-overlay.sh
 
+      - name: Validate overlay
+        shell: bash
+        run: |
+          test -f winlator-app/app/src/main/java/com/winlator/xenvironment/components/NativeGuestDispatcher.java
+          grep -q 'NativeGuestDispatcher.buildCommand' winlator-app/app/src/main/java/com/winlator/xenvironment/components/GuestProgramLauncherComponent.java
+
       - name: Build debug APK
         working-directory: winlator-app
         env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_ROOT }}/24.0.8215888
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_ROOT }}
         run: ./gradlew --no-daemon --stacktrace :app:assembleDebug
 
       - name: Upload APK
