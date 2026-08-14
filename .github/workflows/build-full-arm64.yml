@@ -40,26 +40,27 @@ jobs:
           set -euo pipefail
           sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources || true
           sudo apt-get update
-          sudo apt-get install -y build-essential clang lld flex bison gettext pkg-config python3 curl jq unzip zstd dpkg-dev fakeroot
+          sudo apt-get install -y build-essential clang lld flex bison gettext pkg-config python3 curl jq unzip xz-utils zstd dpkg-dev fakeroot
           sudo apt-get build-dep -y wine || true
 
-      - name: Download AArch64 llvm-mingw
+      - name: Download Linux ARM64 LLVM-MinGW cross toolchain
         shell: bash
         run: |
           set -euo pipefail
-          asset_url="$(curl -fsSL https://api.github.com/repos/mstorsjo/llvm-mingw/releases/latest | jq -r '.assets[] | select(.name | test("ucrt-aarch64\\.zip$")) | .browser_download_url' | head -n1)"
-          test -n "${asset_url}"
+          llvm_mingw_version=20260616
+          llvm_mingw_host=ubuntu-22.04-aarch64
+          archive="llvm-mingw-${llvm_mingw_version}-ucrt-${llvm_mingw_host}.tar.xz"
+          asset_url="https://github.com/mstorsjo/llvm-mingw/releases/download/${llvm_mingw_version}/${archive}"
           mkdir -p toolchains
-          curl -fL --retry 3 "${asset_url}" -o toolchains/llvm-mingw-aarch64.zip
-          unzip -q toolchains/llvm-mingw-aarch64.zip -d toolchains
-          llvm_root="$(find "$PWD/toolchains" -maxdepth 1 -type d -name 'llvm-mingw-*' | head -n1)"
-          test -n "${llvm_root}"
-          llvm_target_bin="${llvm_root}/aarch64-w64-mingw32/bin"
+          curl -fL --retry 3 "${asset_url}" -o "toolchains/${archive}"
+          tar -xJf "toolchains/${archive}" -C toolchains
+          llvm_root="$PWD/toolchains/llvm-mingw-${llvm_mingw_version}-ucrt-${llvm_mingw_host}"
           test -d "${llvm_root}/bin"
-          test -d "${llvm_target_bin}"
-          echo "LLVM_MINGW_BIN=${llvm_target_bin}" >> "$GITHUB_ENV"
+          test -x "${llvm_root}/bin/aarch64-w64-mingw32-clang"
+          test -x "${llvm_root}/bin/arm64ec-w64-mingw32-clang"
+          test -x "${llvm_root}/bin/i686-w64-mingw32-clang"
+          echo "LLVM_MINGW_ROOT=${llvm_root}" >> "$GITHUB_ENV"
           echo "${llvm_root}/bin" >> "$GITHUB_PATH"
-          echo "${llvm_target_bin}" >> "$GITHUB_PATH"
 
       - name: Configure Hangover Wine
         working-directory: third_party/hangover/wine
@@ -70,7 +71,7 @@ jobs:
           echo "PATH=${PATH}"
           mkdir -p build
           cd build
-          ../configure --disable-tests --with-mingw=clang --enable-archs=arm64ec,aarch64,i386
+          ../configure --disable-tests --with-mingw=llvm-mingw --enable-archs=arm64ec,aarch64,i386
 
       - name: Build Hangover Wine
         working-directory: third_party/hangover/wine/build
