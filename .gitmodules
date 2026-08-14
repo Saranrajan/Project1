@@ -1,0 +1,4 @@
+[submodule "third_party/hangover"]
+	path = third_party/hangover
+	url = https://github.com/AndreRH/hangover.git
+	branch = master
