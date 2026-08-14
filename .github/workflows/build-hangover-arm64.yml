@@ -17,8 +17,13 @@ jobs:
       - name: Checkout experiment repository
         uses: actions/checkout@v4
 
-      - name: Initialize Hangover submodule
-        run: git submodule update --init --recursive
+      - name: Clone Hangover and initialize its runtime submodules
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf third_party/hangover
+          git clone --depth 1 --branch master https://github.com/AndreRH/hangover.git third_party/hangover
+          git -C third_party/hangover submodule update --init --recursive --depth 1
 
       - name: Install Wine build dependencies
         shell: bash
@@ -27,20 +32,7 @@ jobs:
           sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources || true
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential \
-            clang \
-            lld \
-            flex \
-            bison \
-            gettext \
-            pkg-config \
-            python3 \
-            curl \
-            jq \
-            unzip \
-            zstd \
-            dpkg-dev \
-            fakeroot
+            build-essential clang lld flex bison gettext pkg-config python3 curl jq unzip zstd dpkg-dev fakeroot
           sudo apt-get build-dep -y wine || true
 
       - name: Download AArch64 llvm-mingw host toolchain
@@ -53,6 +45,14 @@ jobs:
           curl -fL --retry 3 "${asset_url}" -o toolchains/llvm-mingw-aarch64.zip
           unzip -q toolchains/llvm-mingw-aarch64.zip -d toolchains
           echo "LLVM_MINGW_BIN=$(find "$PWD/toolchains" -type d -path '*/bin' | head -n1)" >> "$GITHUB_ENV"
+
+      - name: Verify Hangover Wine source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -x third_party/hangover/wine/configure
+          test -d third_party/hangover/fex
+          test -d third_party/hangover/box64
 
       - name: Configure Hangover Wine
         working-directory: third_party/hangover/wine
