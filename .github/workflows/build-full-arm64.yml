@@ -18,8 +18,21 @@ jobs:
       - name: Checkout experiment repository
         uses: actions/checkout@v4
 
-      - name: Initialize Hangover submodule
-        run: git submodule update --init --recursive
+      - name: Clone Hangover and initialize its runtime submodules
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf third_party/hangover
+          git clone --depth 1 --branch master https://github.com/AndreRH/hangover.git third_party/hangover
+          git -C third_party/hangover submodule update --init --recursive --depth 1
+
+      - name: Verify Hangover Wine source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -x third_party/hangover/wine/configure
+          test -d third_party/hangover/fex
+          test -d third_party/hangover/box64
 
       - name: Install native build dependencies
         shell: bash
@@ -46,6 +59,7 @@ jobs:
         env:
           PATH: ${{ env.LLVM_MINGW_BIN }}:${{ env.PATH }}
         run: |
+          set -euo pipefail
           mkdir -p build
           cd build
           ../configure --disable-tests --with-mingw=clang --enable-archs=arm64ec,aarch64,i386
