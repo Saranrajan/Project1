@@ -32,3 +32,13 @@ index 3381b65d..f25ce517 100644
  #elif defined(__arm__)
      register ULONG_PTR val __asm__("r0") = code;
      for (;;) __asm__ __volatile__( "udf #0xfb" :: "r" (val) : "memory" );
+diff --git a/libs/tomcrypt/src/headers/tomcrypt_macros.h b/libs/tomcrypt/src/headers/tomcrypt_macros.h
+index d3d3958..04ae0e4 100644
+--- a/libs/tomcrypt/src/headers/tomcrypt_macros.h
++++ b/libs/tomcrypt/src/headers/tomcrypt_macros.h
+@@ -242,4 +242,4 @@
+-#if !defined(__STRICT_ANSI__) && defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__)) && !defined(INTEL_CC) && !defined(LTC_NO_ASM)
++#if !defined(__STRICT_ANSI__) && defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__)) && !defined(__arm64ec__) && !defined(INTEL_CC) && !defined(LTC_NO_ASM)
+ 
+ static inline ulong32 ROL(ulong32 word, int i)
+ {
