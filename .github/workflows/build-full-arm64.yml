@@ -75,7 +75,21 @@ jobs:
 
       - name: Build Hangover Wine
         working-directory: third_party/hangover/wine/build
-        run: make -j"$(nproc)"
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          make -j"$(nproc)" 2>&1 | tee build.log
+          make_status=${PIPESTATUS[0]}
+          set -e
+          if (( make_status != 0 )); then
+            failure_summary="$(grep -Eim1 '(^|[^[:alnum:]_])(fatal )?error:|^make(\[[0-9]+\])?: \*\*\*' build.log || tail -n1 build.log)"
+            failure_summary="${failure_summary//'%'/'%25'}"
+            failure_summary="${failure_summary//$'\r'/'%0D'}"
+            failure_summary="${failure_summary//$'\n'/'%0A'}"
+            echo "::error title=Hangover Wine build failure::${failure_summary}"
+            exit "${make_status}"
+          fi
 
       - name: Stage runtime
         working-directory: third_party/hangover/wine/build
