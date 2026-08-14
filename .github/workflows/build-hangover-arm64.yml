@@ -44,7 +44,14 @@ jobs:
           mkdir -p toolchains
           curl -fL --retry 3 "${asset_url}" -o toolchains/llvm-mingw-aarch64.zip
           unzip -q toolchains/llvm-mingw-aarch64.zip -d toolchains
-          echo "LLVM_MINGW_BIN=$(find "$PWD/toolchains" -type d -path '*/bin' | head -n1)" >> "$GITHUB_ENV"
+          llvm_root="$(find "$PWD/toolchains" -maxdepth 1 -type d -name 'llvm-mingw-*' | head -n1)"
+          test -n "${llvm_root}"
+          llvm_target_bin="${llvm_root}/aarch64-w64-mingw32/bin"
+          test -d "${llvm_root}/bin"
+          test -d "${llvm_target_bin}"
+          echo "LLVM_MINGW_BIN=${llvm_target_bin}" >> "$GITHUB_ENV"
+          echo "${llvm_root}/bin" >> "$GITHUB_PATH"
+          echo "${llvm_target_bin}" >> "$GITHUB_PATH"
 
       - name: Verify Hangover Wine source
         shell: bash
@@ -56,10 +63,11 @@ jobs:
 
       - name: Configure Hangover Wine
         working-directory: third_party/hangover/wine
-        env:
-          PATH: ${{ env.LLVM_MINGW_BIN }}:${{ env.PATH }}
         run: |
           set -euo pipefail
+          command -v mkdir
+          command -v clang
+          echo "PATH=${PATH}"
           mkdir -p build
           cd build
           ../configure \
@@ -69,14 +77,10 @@ jobs:
 
       - name: Build Hangover Wine
         working-directory: third_party/hangover/wine/build
-        env:
-          PATH: ${{ env.LLVM_MINGW_BIN }}:${{ env.PATH }}
         run: make -j"$(nproc)"
 
       - name: Install runtime into staging root
         working-directory: third_party/hangover/wine/build
-        env:
-          PATH: ${{ env.LLVM_MINGW_BIN }}:${{ env.PATH }}
         run: |
           set -euo pipefail
           rm -rf "$GITHUB_WORKSPACE/artifacts/rootfs"
