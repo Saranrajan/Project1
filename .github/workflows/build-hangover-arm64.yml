@@ -62,12 +62,11 @@ jobs:
           test -d third_party/hangover/fex
           test -d third_party/hangover/box64
 
-      - name: Apply upstream ARM64EC fastfail fix
+      - name: Apply upstream ARM64EC fixes
         shell: bash
         run: |
           set -euo pipefail
-          git -C third_party/hangover/wine apply --check "$GITHUB_WORKSPACE/patches/hangover-arm64ec-fastfail.patch"
-          git -C third_party/hangover/wine apply "$GITHUB_WORKSPACE/patches/hangover-arm64ec-fastfail.patch"
+          python3 scripts/patch_hangover.py third_party/hangover/wine
 
       - name: Configure Hangover Wine
         working-directory: third_party/hangover/wine
