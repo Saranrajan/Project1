@@ -200,7 +200,9 @@ jobs:
         working-directory: winlator-app
         env:
           ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_ROOT }}
-        run: ./gradlew --no-daemon --stacktrace :app:assembleDebug
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon --stacktrace :app:assembleDebug
 
       - name: Upload final APK
         uses: actions/upload-artifact@v4

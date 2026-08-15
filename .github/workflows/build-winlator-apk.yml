@@ -28,12 +28,11 @@ jobs:
           path: winlator-app
           fetch-depth: 1
 
-      - name: Set up JDK 11
+      - name: Set up JDK 17 for Android SDK tools
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '11'
-          cache: gradle
+          java-version: '17'
 
       - name: Configure hosted Android SDK
         shell: bash
@@ -54,6 +53,13 @@ jobs:
             'ndk;24.0.8215888' \
             'cmake;3.22.1'
 
+      - name: Set up JDK 11 for Gradle
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '11'
+          cache: gradle
+
       - name: Initialize upstream submodules
         working-directory: winlator-app
         run: git submodule update --init --recursive
@@ -71,7 +77,9 @@ jobs:
         working-directory: winlator-app
         env:
           ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_ROOT }}
-        run: ./gradlew --no-daemon --stacktrace :app:assembleDebug
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon --stacktrace :app:assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
