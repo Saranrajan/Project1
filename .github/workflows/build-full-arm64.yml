@@ -36,13 +36,7 @@ jobs:
           test -d third_party/hangover/fex
           test -d third_party/hangover/box64
 
-      - name: Apply upstream ARM64EC fixes
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 scripts/patch_hangover.py third_party/hangover/wine
-
-      - name: Install native build dependencies
+      - name: Install native Wine build dependencies
         shell: bash
         run: |
           set -euo pipefail
@@ -51,7 +45,7 @@ jobs:
           sudo apt-get install -y build-essential clang lld flex bison gettext pkg-config python3 curl jq unzip xz-utils zstd dpkg-dev fakeroot
           sudo apt-get build-dep -y wine || true
 
-      - name: Download Linux ARM64 LLVM-MinGW cross toolchain
+      - name: Download and expose LLVM-MinGW
         shell: bash
         run: |
           set -euo pipefail
@@ -70,34 +64,42 @@ jobs:
           echo "LLVM_MINGW_ROOT=${llvm_root}" >> "$GITHUB_ENV"
           echo "${llvm_root}/bin" >> "$GITHUB_PATH"
 
+      - name: Validate native and PE compilers
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v gcc
+          command -v clang
+          command -v aarch64-w64-mingw32-clang
+          command -v arm64ec-w64-mingw32-clang
+          command -v i686-w64-mingw32-clang
+          printf 'int main(void) { return 0; }\n' > /tmp/host-test.c
+          gcc /tmp/host-test.c -o /tmp/host-test
+          /tmp/host-test
+          printf 'int main(void) { return 0; }\n' > /tmp/pe-test.c
+          aarch64-w64-mingw32-clang /tmp/pe-test.c -o /tmp/pe-test.exe
+          file /tmp/pe-test.exe
+
       - name: Configure Hangover Wine
         working-directory: third_party/hangover/wine
+        shell: bash
         run: |
           set -euo pipefail
           command -v mkdir
-          command -v clang
-          echo "PATH=${PATH}"
+          command -v gcc
+          command -v aarch64-w64-mingw32-clang
+          command -v arm64ec-w64-mingw32-clang
           mkdir -p build
           cd build
-          ../configure --disable-tests --with-mingw=llvm-mingw --enable-archs=arm64ec,aarch64,i386
+          ../configure --disable-tests --with-mingw=clang --enable-archs=arm64ec,aarch64,i386 2>&1 | tee configure.log
+          test -f config.log
 
       - name: Build Hangover Wine
         working-directory: third_party/hangover/wine/build
         shell: bash
         run: |
           set -euo pipefail
-          set +e
           make -j"$(nproc)" 2>&1 | tee build.log
-          make_status=${PIPESTATUS[0]}
-          set -e
-          if (( make_status != 0 )); then
-            failure_summary="$(grep -Eim1 '(^|[^[:alnum:]_])(fatal )?error:|^make(\[[0-9]+\])?: \*\*\*' build.log || tail -n1 build.log)"
-            failure_summary="${failure_summary//'%'/'%25'}"
-            failure_summary="${failure_summary//$'\r'/'%0D'}"
-            failure_summary="${failure_summary//$'\n'/'%0A'}"
-            echo "::error title=Hangover Wine build failure::${failure_summary}"
-            exit "${make_status}"
-          fi
 
       - name: Stage runtime
         working-directory: third_party/hangover/wine/build
@@ -106,11 +108,8 @@ jobs:
           rm -rf "$GITHUB_WORKSPACE/artifacts/rootfs"
           mkdir -p "$GITHUB_WORKSPACE/artifacts/rootfs"
           make DESTDIR="$GITHUB_WORKSPACE/artifacts/rootfs" install
-          wine_bin="$GITHUB_WORKSPACE/artifacts/rootfs/usr/local/bin/wine"
-          wine_arm64="$GITHUB_WORKSPACE/artifacts/rootfs/usr/local/bin/wine-arm64"
-          if [[ -x "$wine_bin" && ! -e "$wine_arm64" ]]; then
-            ln -s wine "$wine_arm64"
-          fi
+          test -e "$GITHUB_WORKSPACE/artifacts/rootfs/usr/local/bin/wine"
+          file "$GITHUB_WORKSPACE/artifacts/rootfs/usr/local/bin/wine"
 
       - name: Package runtime artifact
         run: |
@@ -126,7 +125,7 @@ jobs:
           path: |
             artifacts/native_arm64_wine.tzst
             artifacts/native_arm64_wine.sha256
-          retention-days: 3
+          retention-days: 14
 
   build-apk:
     name: Build Winlator APK with native ARM64 Wine
