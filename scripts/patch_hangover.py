@@ -10,7 +10,6 @@ def patch_winnt(wine_dir: pathlib.Path) -> bool:
         return False
     
     text = winnt_path.read_text(encoding="utf-8", errors="replace")
-    original = text
     
     # 1. InterlockedExchange atomic builtins for clang
     text = re.sub(
@@ -50,26 +49,35 @@ def patch_winnt(wine_dir: pathlib.Path) -> bool:
     return True
 
 def patch_tomcrypt(wine_dir: pathlib.Path) -> bool:
-    found_any = False
-    for tc_path in wine_dir.glob("**/tomcrypt_macros.h"):
-        found_any = True
+    found_files = list(wine_dir.glob("**/tomcrypt_macros.h"))
+    if not found_files:
+        print(f"Error: No tomcrypt_macros.h found under {wine_dir}")
+        return False
+        
+    all_ok = True
+    for tc_path in found_files:
         text = tc_path.read_text(encoding="utf-8", errors="replace")
         original = text
         
-        # Disallow x86 inline asm in LibTomCrypt for ARM64EC
-        pattern = r'(#if\s+!defined\(__STRICT_ANSI__\)\s*&&\s*defined\(__GNUC__\)\s*&&\s*\(defined\(__i386__\)\s*\|\|\s*defined\(__x86_64__\)\))'
+        # 1. 32-bit rotate asm guard (#elif !defined(__STRICT_ANSI__) && defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__)))
+        pattern32 = r'(defined\(__GNUC__\)\s*&&\s*\(defined\(__i386__\)\s*\|\|\s*defined\(__x86_64__\)\))'
+        text, c32 = re.subn(pattern32, r'\1 && !defined(__arm64ec__)', text)
+        
+        # 2. 64-bit rotate asm guard (#elif !defined(__STRICT_ANSI__) && defined(__GNUC__) && defined(__x86_64__))
+        pattern64 = r'(defined\(__GNUC__\)\s*&&\s*defined\(__x86_64__\)\s*&&\s*!defined\(INTEL_CC\))'
+        text, c64 = re.subn(pattern64, r'\1 && !defined(__arm64ec__)', text)
+        
+        print(f"{tc_path}: applied {c32} 32-bit and {c64} 64-bit ARM64EC guards")
         if "__arm64ec__" not in text:
-            text = re.sub(pattern, r'\1 && !defined(__arm64ec__)', text)
+            print(f"Error: __arm64ec__ not found in {tc_path} after patching")
+            all_ok = False
+            continue
             
         if text != original:
             tc_path.write_text(text, encoding="utf-8", newline="\n")
-            print(f"Successfully patched {tc_path}")
-        else:
-            print(f"tomcrypt_macros.h already patched or pattern matched: {tc_path}")
+            print(f"Successfully wrote patched {tc_path}")
             
-    if not found_any:
-        print(f"Warning: No tomcrypt_macros.h found under {wine_dir}")
-    return True
+    return all_ok
 
 def main():
     wine_dir = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else pathlib.Path("third_party/hangover/wine")
