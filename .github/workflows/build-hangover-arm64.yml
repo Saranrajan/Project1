@@ -3,7 +3,9 @@ name: Build Hangover ARM64 Wine Runtime
 on:
   push:
     branches:
+      - 'feature/*'
       - 'feature/**'
+      - 'feature/native-arm64-runtime'
   workflow_dispatch:
 
 permissions:

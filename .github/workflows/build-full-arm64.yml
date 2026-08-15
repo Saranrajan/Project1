@@ -3,7 +3,9 @@ name: Build ARM64 Winlator with Native Wine
 on:
   push:
     branches:
+      - 'feature/*'
       - 'feature/**'
+      - 'feature/native-arm64-runtime'
   pull_request:
   workflow_dispatch:
 
