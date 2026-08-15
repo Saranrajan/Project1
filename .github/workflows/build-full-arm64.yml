@@ -154,12 +154,11 @@ jobs:
           mkdir -p winlator-app/app/src/main/assets
           cp runtime-artifact/native_arm64_wine.tzst winlator-app/app/src/main/assets/native_arm64_wine.tzst
 
-      - name: Set up JDK 11
+      - name: Set up JDK 17 for Android SDK tools
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '11'
-          cache: gradle
+          java-version: '17'
 
       - name: Configure hosted Android SDK
         shell: bash
@@ -174,6 +173,13 @@ jobs:
           echo "${ANDROID_SDK_ROOT}/platform-tools" >> "$GITHUB_PATH"
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager 'platform-tools' 'platforms;android-34' 'build-tools;34.0.0' 'ndk;24.0.8215888' 'cmake;3.22.1'
+
+      - name: Set up JDK 11 for Gradle
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '11'
+          cache: gradle
 
       - name: Initialize upstream submodules
         working-directory: winlator-app
