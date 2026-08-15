@@ -17,13 +17,14 @@ ROOTFS_INSTALLER="${APP_DIR}/app/src/main/java/com/winlator/xenvironment/RootFSI
 mkdir -p "${JAVA_DIR}"
 cp "${DISPATCHER_OVERLAY}" "${DISPATCHER_TARGET}"
 
-python3 - "${LAUNCHER}" "${ROOTFS_INSTALLER}" <<'PY'
+python3 - "${LAUNCHER}" "${ROOTFS_INSTALLER}" "${APP_DIR}" <<'PY'
 import pathlib
 import re
 import sys
 
 launcher = pathlib.Path(sys.argv[1])
 rootfs = pathlib.Path(sys.argv[2])
+app_dir = pathlib.Path(sys.argv[3])
 
 text = launcher.read_text(encoding="utf-8")
 pattern = r'String command\s*=\s*rootDir\+"/usr/local/bin/box64 "\+guestExecutable;'
@@ -60,6 +61,33 @@ text3, count = text2.replace(marker, replacement2, 1), 1
 if marker not in text2:
     raise SystemExit("Could not locate rootfs success block; refusing to patch")
 rootfs.write_text(text3, encoding="utf-8")
+
+# Fix upstream missing IntArray_indexOf in C/C++ runtime (required by gladiorenderer)
+arrays_h = app_dir / "app/src/main/cpp/winlator/include/arrays.h"
+if arrays_h.is_file():
+    text = arrays_h.read_text(encoding="utf-8")
+    if "IntArray_indexOf" not in text:
+        text = text.replace(
+            "extern void IntArray_sort(IntArray* intArray);",
+            "extern void IntArray_sort(IntArray* intArray);\nextern int IntArray_indexOf(IntArray* intArray, int value);"
+        )
+        arrays_h.write_text(text, encoding="utf-8")
+
+arrays_c = app_dir / "app/src/main/cpp/winlator/src/arrays.c"
+if arrays_c.is_file():
+    text = arrays_c.read_text(encoding="utf-8")
+    if "IntArray_indexOf" not in text:
+        func = """
+int IntArray_indexOf(IntArray* intArray, int value) {
+    if (!intArray || !intArray->values) return -1;
+    for (int i = 0; i < intArray->size; i++) {
+        if (intArray->values[i] == value) return i;
+    }
+    return -1;
+}
+"""
+        text = text.replace("void IntArray_clear(IntArray* intArray) {", func + "\nvoid IntArray_clear(IntArray* intArray) {")
+        arrays_c.write_text(text, encoding="utf-8")
 PY
 
 echo "Applied Project1 ARM64 runtime and launcher overlays."
