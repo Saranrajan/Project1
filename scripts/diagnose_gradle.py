@@ -12,42 +12,58 @@ def main():
     total = len(lines)
     print(f"Total gradle log lines: {total}")
     
-    error_indices = []
+    # 1. Look for Gradle 'What went wrong' block
+    what_idx = -1
     for i, line in enumerate(lines):
-        l_lower = line.lower()
-        if any(k in l_lower for k in ["* what went wrong:", "failure:", "error:", "exception:", "caused by:", "cmake error", "clang++: error:"]):
-            error_indices.append(i)
+        if "* What went wrong:" in line or "* what went wrong:" in line:
+            what_idx = i
             
-    print(f"Found {len(error_indices)} error/failure markers.")
-    
-    # Collect unique lines around error indices
-    selected_indices = set()
-    for idx in error_indices[-20:]:  # Focus on the last 20 error markers
-        for j in range(max(0, idx - 5), min(total, idx + 15)):
-            selected_indices.add(j)
+    if what_idx != -1:
+        end_idx = min(total, what_idx + 40)
+        for j in range(what_idx, min(total, what_idx + 60)):
+            if "* Try:" in lines[j] or "* Get more help" in lines[j]:
+                end_idx = j
+                break
+        wrong_excerpt = "\n".join(lines[what_idx:end_idx])
+        print("\n" + "="*80)
+        print("GRADLE 'WHAT WENT WRONG' SECTION:")
+        print("="*80)
+        print(wrong_excerpt)
+        print("="*80 + "\n")
+        
+        summary = " ".join([l.strip() for l in lines[what_idx:end_idx] if l.strip()])
+        if len(summary) > 1000:
+            summary = summary[:997] + "..."
+        escaped_summary = summary.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+        print(f"::error title=Gradle Root Cause::{escaped_summary}")
+        return
+
+    # 2. If 'What went wrong' not found, search for 'Execution failed for task' or 'FAILURE:'
+    fail_indices = []
+    for i, line in enumerate(lines):
+        if any(k in line for k in ["FAILURE: Build failed", "Execution failed for task", "FAILED", "Caused by:"]):
+            fail_indices.append(i)
             
-    # If no markers found, take the last 50 lines
-    if not selected_indices:
-        for j in range(max(0, total - 50), total):
-            selected_indices.add(j)
-            
-    excerpt_lines = [lines[j] for j in sorted(selected_indices)]
-    excerpt_text = "\n".join(excerpt_lines)
-    
-    print("\n" + "="*80)
-    print("GRADLE BUILD FAILURE EXCERPT:")
-    print("="*80)
-    print(excerpt_text)
-    print("="*80 + "\n")
-    
-    # Format single-line summary for GitHub Actions annotation (limit to 1000 chars)
-    first_few = [l.strip() for l in excerpt_lines if l.strip()][:15]
-    summary = " | ".join(first_few)
-    if len(summary) > 1000:
-        summary = summary[:997] + "..."
-    # Escape newlines as %0A for GitHub Actions ::error
+    if fail_indices:
+        last_fail = fail_indices[-1]
+        start = max(0, last_fail - 10)
+        end = min(total, last_fail + 40)
+        excerpt = "\n".join(lines[start:end])
+        print("\n" + "="*80)
+        print("GRADLE FAILURE TRACE:")
+        print("="*80)
+        print(excerpt)
+        print("="*80 + "\n")
+        summary = " ".join([l.strip() for l in lines[start:end] if l.strip()])[:997]
+        escaped_summary = summary.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+        print(f"::error title=Gradle Failure Trace::{escaped_summary}")
+        return
+
+    # 3. Fallback: last 50 lines
+    last_lines = lines[-50:]
+    summary = " ".join([l.strip() for l in last_lines if l.strip()])[:997]
     escaped_summary = summary.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-    print(f"::error title=Gradle Build Error::{escaped_summary}")
+    print(f"::error title=Gradle Build End::{escaped_summary}")
 
 if __name__ == "__main__":
     main()
