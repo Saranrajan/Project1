@@ -12,58 +12,40 @@ def main():
     total = len(lines)
     print(f"Total gradle log lines: {total}")
     
-    # 1. Look for Gradle 'What went wrong' block
-    what_idx = -1
+    # 1. Search for 'FAILED: ' or 'error: ' (ignoring warnings and entering directory)
+    failed_lines = []
     for i, line in enumerate(lines):
-        if "* What went wrong:" in line or "* what went wrong:" in line:
-            what_idx = i
+        if line.startswith("FAILED:") or "clang: error:" in line or "clang++: error:" in line or ("error:" in line and "warning:" not in line and "note:" not in line):
+            failed_lines.append(i)
             
-    if what_idx != -1:
-        end_idx = min(total, what_idx + 40)
-        for j in range(what_idx, min(total, what_idx + 60)):
-            if "* Try:" in lines[j] or "* Get more help" in lines[j]:
-                end_idx = j
-                break
-        wrong_excerpt = "\n".join(lines[what_idx:end_idx])
+    if failed_lines:
+        # Take from first failure to 30 lines after last failure
+        start = max(0, failed_lines[0] - 2)
+        end = min(total, failed_lines[-1] + 35)
+        failure_block = "\n".join(lines[start:end])
         print("\n" + "="*80)
-        print("GRADLE 'WHAT WENT WRONG' SECTION:")
+        print("EXACT COMPILER / BUILD FAILURE BLOCK:")
         print("="*80)
-        print(wrong_excerpt)
+        print(failure_block)
         print("="*80 + "\n")
         
-        summary = " ".join([l.strip() for l in lines[what_idx:end_idx] if l.strip()])
+        # Format for github annotation
+        summary = " ".join([l.strip() for l in lines[failed_lines[0]:min(total, failed_lines[0] + 25)] if l.strip()])
         if len(summary) > 1000:
             summary = summary[:997] + "..."
         escaped_summary = summary.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-        print(f"::error title=Gradle Root Cause::{escaped_summary}")
+        print(f"::error title=Exact Compiler Error::{escaped_summary}")
         return
 
-    # 2. If 'What went wrong' not found, search for 'Execution failed for task' or 'FAILURE:'
-    fail_indices = []
+    # 2. Search for '* What went wrong:' and skip the argument dump to get to the error
     for i, line in enumerate(lines):
-        if any(k in line for k in ["FAILURE: Build failed", "Execution failed for task", "FAILED", "Caused by:"]):
-            fail_indices.append(i)
-            
-    if fail_indices:
-        last_fail = fail_indices[-1]
-        start = max(0, last_fail - 10)
-        end = min(total, last_fail + 40)
-        excerpt = "\n".join(lines[start:end])
-        print("\n" + "="*80)
-        print("GRADLE FAILURE TRACE:")
-        print("="*80)
-        print(excerpt)
-        print("="*80 + "\n")
-        summary = " ".join([l.strip() for l in lines[start:end] if l.strip()])[:997]
-        escaped_summary = summary.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-        print(f"::error title=Gradle Failure Trace::{escaped_summary}")
-        return
-
-    # 3. Fallback: last 50 lines
-    last_lines = lines[-50:]
-    summary = " ".join([l.strip() for l in last_lines if l.strip()])[:997]
-    escaped_summary = summary.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-    print(f"::error title=Gradle Build End::{escaped_summary}")
+        if "* What went wrong:" in line or "* what went wrong:" in line:
+            start = i
+            end = min(total, i + 60)
+            summary = " ".join([l.strip() for l in lines[start:end] if l.strip()])[:997]
+            escaped_summary = summary.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+            print(f"::error title=Gradle Root Cause::{escaped_summary}")
+            return
 
 if __name__ == "__main__":
     main()
