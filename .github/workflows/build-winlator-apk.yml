@@ -81,10 +81,7 @@ jobs:
           set -o pipefail
           chmod +x ./gradlew
           if ! ./gradlew --no-daemon --stacktrace :app:assembleDebug 2>&1 | tee gradle-build.log; then
-            echo "::error::Gradle build failed. Diagnostic excerpt:"
-            grep -E -C 2 -i '(error:|failure|failed|exception|caused by)' gradle-build.log | tail -n 40 || true
-            echo "::error::Last 30 lines of gradle build log:"
-            tail -n 30 gradle-build.log
+            python3 ../scripts/diagnose_gradle.py gradle-build.log
             exit 1
           fi
 
