@@ -103,6 +103,7 @@ jobs:
 
       - name: Stage runtime
         working-directory: third_party/hangover/wine/build
+        shell: bash
         run: |
           set -euo pipefail
           rm -rf "$GITHUB_WORKSPACE/artifacts/rootfs"
@@ -112,6 +113,7 @@ jobs:
           file "$GITHUB_WORKSPACE/artifacts/rootfs/usr/local/bin/wine"
 
       - name: Package runtime artifact
+        shell: bash
         run: |
           set -euo pipefail
           mkdir -p artifacts
@@ -149,6 +151,7 @@ jobs:
           path: runtime-artifact
 
       - name: Install native runtime asset
+        shell: bash
         run: |
           set -euo pipefail
           mkdir -p winlator-app/app/src/main/assets
