@@ -103,19 +103,20 @@ int IntArray_indexOf(IntArray* intArray, int value) {
 arb_c = app_dir / "app/src/main/cpp/gladiorenderer/src/arb_program.c"
 if arb_c.is_file():
     text = arb_c.read_text(encoding="utf-8")
-    if "static int IntArray_indexOf" not in text:
-        func = """
-static int IntArray_indexOf(const IntArray* intArray, int value) {
+    if "IntArray_indexOf" not in text or "static inline int IntArray_indexOf" not in text:
+        func = """#include "gl_context.h"
+#include "arrays.h"
+
+static inline int IntArray_indexOf(const IntArray* intArray, int value) {
     if (!intArray || !intArray->values) return -1;
     for (int i = 0; i < intArray->size; i++) {
         if (intArray->values[i] == value) return i;
     }
     return -1;
-}
-"""
-        text = func + "\n" + text
+}"""
+        text = text.replace('#include "gl_context.h"', func, 1)
         arb_c.write_text(text, encoding="utf-8")
-        print("Patched arb_program.c with local static IntArray_indexOf")
+        print("Patched arb_program.c with local static inline IntArray_indexOf")
 PY
 
 echo "Applied Project1 ARM64 runtime and launcher overlays."
