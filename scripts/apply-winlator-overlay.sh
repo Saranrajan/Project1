@@ -67,11 +67,21 @@ arrays_h = app_dir / "app/src/main/cpp/winlator/include/arrays.h"
 if arrays_h.is_file():
     text = arrays_h.read_text(encoding="utf-8")
     if "IntArray_indexOf" not in text:
-        text = text.replace(
-            "extern void IntArray_sort(IntArray* intArray);",
-            "extern void IntArray_sort(IntArray* intArray);\nextern int IntArray_indexOf(IntArray* intArray, int value);"
-        )
+        inline_func = """
+static inline int IntArray_indexOf(const IntArray* intArray, int value) {
+    if (!intArray || !intArray->values) return -1;
+    for (int i = 0; i < intArray->size; i++) {
+        if (intArray->values[i] == value) return i;
+    }
+    return -1;
+}
+"""
+        idx = text.rfind("#endif")
+        if idx == -1:
+            raise SystemExit("Could not find #endif in arrays.h")
+        text = text[:idx] + inline_func + "\n" + text[idx:]
         arrays_h.write_text(text, encoding="utf-8")
+        print("Patched arrays.h with static inline IntArray_indexOf")
 
 arrays_c = app_dir / "app/src/main/cpp/winlator/src/arrays.c"
 if arrays_c.is_file():
@@ -86,8 +96,26 @@ int IntArray_indexOf(IntArray* intArray, int value) {
     return -1;
 }
 """
-        text = text.replace("void IntArray_clear(IntArray* intArray) {", func + "\nvoid IntArray_clear(IntArray* intArray) {")
+        text = text + "\n" + func
         arrays_c.write_text(text, encoding="utf-8")
+        print("Patched arrays.c with IntArray_indexOf")
+
+arb_c = app_dir / "app/src/main/cpp/gladiorenderer/src/arb_program.c"
+if arb_c.is_file():
+    text = arb_c.read_text(encoding="utf-8")
+    if "static int IntArray_indexOf" not in text:
+        func = """
+static int IntArray_indexOf(const IntArray* intArray, int value) {
+    if (!intArray || !intArray->values) return -1;
+    for (int i = 0; i < intArray->size; i++) {
+        if (intArray->values[i] == value) return i;
+    }
+    return -1;
+}
+"""
+        text = func + "\n" + text
+        arb_c.write_text(text, encoding="utf-8")
+        print("Patched arb_program.c with local static IntArray_indexOf")
 PY
 
 echo "Applied Project1 ARM64 runtime and launcher overlays."
