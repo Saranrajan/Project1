@@ -117,6 +117,18 @@ static inline int IntArray_indexOf(const IntArray* intArray, int value) {
         text = text.replace('#include "gl_context.h"', func, 1)
         arb_c.write_text(text, encoding="utf-8")
         print("Patched arb_program.c with local static inline IntArray_indexOf")
+
+# Configure packagingOptions to handle duplicate JNI library symbols across CMake and prebuilts
+build_gradle = app_dir / "app/build.gradle"
+if build_gradle.is_file():
+    text = build_gradle.read_text(encoding="utf-8")
+    if "packagingOptions" not in text:
+        pattern = r'(ndkVersion\s+[\'"][^\'"]+[\'"])'
+        replacement = r'\1\n\n    packagingOptions {\n        jniLibs {\n            pickFirsts += [\'**/*.so\']\n        }\n    }'
+        text2, count = re.subn(pattern, replacement, text, count=1)
+        if count == 1:
+            build_gradle.write_text(text2, encoding="utf-8")
+            print("Patched app/build.gradle with packagingOptions jniLibs pickFirsts")
 PY
 
 echo "Applied Project1 ARM64 runtime and launcher overlays."
