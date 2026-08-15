@@ -3,63 +3,56 @@ import pathlib
 import re
 import sys
 
-def patch_winnt(wine_dir: pathlib.Path):
+def patch_winnt(wine_dir: pathlib.Path) -> bool:
     winnt_path = wine_dir / "include" / "winnt.h"
     if not winnt_path.exists():
-        print(f"Warning: {winnt_path} not found")
+        print(f"Error: {winnt_path} not found")
         return False
     
     text = winnt_path.read_text(encoding="utf-8", errors="replace")
     original = text
     
-    # 1. InterlockedExchange atomic builtin for clang
-    pattern_interlocked = r'#if\s+\(__GNUC__\s*>\s*4\)\s*\|\|\s*\(\(__GNUC__\s*==\s*4\)\s*&&\s*\(__GNUC_MINOR__\s*>=\s*7\)\)'
-    replacement_interlocked = '#if (__GNUC__ > 4) || ((__GNUC__ == 4) && (__GNUC_MINOR__ >= 7)) || defined(__clang__)'
-    text = re.sub(pattern_interlocked, replacement_interlocked, text)
-    
-    # 2. __fastfail inline assembly for arm64ec
-    # Upstream winnt.h __fastfail:
-    # #if defined(__x86_64__) || defined(__i386__)
-    #     for (;;) __asm__ __volatile__( "int $0x29" :: "c" ((ULONG_PTR)code) : "memory" );
-    # #elif defined(__aarch64__)
-    #     register ULONG_PTR val __asm__("x0") = code;
-    #     for (;;) __asm__ __volatile__( "brk #0xf003" :: "r" (val) : "memory" );
-    pattern_fastfail = (
-        r'(static\s+FORCEINLINE\s+DECLSPEC_NORETURN\s+void\s+__fastfail\s*\([^)]*\)\s*\{[\s\r\n]*)'
-        r'#if\s+defined\(__x86_64__\)\s*\|\|\s*defined\(__i386__\)[\s\r\n]+'
-        r'for\s*\(\s*;\s*;\s*\)\s*__asm__\s*__volatile__\s*\(\s*"int\s+\$0x29"[^;]+;\s*[\r\n]+'
-        r'#elif\s+defined\(__aarch64__\)[\s\r\n]+'
-        r'register\s+ULONG_PTR\s+val\s+__asm__\("x0"\)\s*=\s*code;\s*[\r\n]+'
-        r'for\s*\(\s*;\s*;\s*\)\s*__asm__\s*__volatile__\s*\(\s*"brk\s+#0xf003"[^;]+;\s*'
+    # 1. InterlockedExchange atomic builtins for clang
+    text = re.sub(
+        r'#if\s+\(__GNUC__\s*>\s*4\)\s*\|\|\s*\(\(__GNUC__\s*==\s*4\)\s*&&\s*\(__GNUC_MINOR__\s*>=\s*7\)\)',
+        '#if (__GNUC__ > 4) || ((__GNUC__ == 4) && (__GNUC_MINOR__ >= 7)) || defined(__clang__)',
+        text
     )
-    replacement_fastfail = (
-        r'\1'
-        r'#if defined(__aarch64__) || defined(__arm64ec__)\n'
-        r'    register ULONG_PTR val __asm__("x0") = code;\n'
-        r'    for (;;) __asm__ __volatile__( "brk #0xf003" :: "r" (val) : "memory" );\n'
-        r'#elif defined(__x86_64__) || defined(__i386__)\n'
-        r'    for (;;) __asm__ __volatile__( "int $0x29" :: "c" ((ULONG_PTR)code) : "memory" );\n'
-    )
-    text = re.sub(pattern_fastfail, replacement_fastfail, text)
     
-    # Generic fastfail fallback if specific pattern didn't match
-    if "__arm64ec__" not in text and "__fastfail" in text:
-        text = text.replace(
-            '#if defined(__x86_64__) || defined(__i386__)\n    for (;;) __asm__ __volatile__( "int $0x29"',
-            '#if defined(__aarch64__) || defined(__arm64ec__)\n    register ULONG_PTR val __asm__("x0") = code;\n    for (;;) __asm__ __volatile__( "brk #0xf003" :: "r" (val) : "memory" );\n#elif defined(__x86_64__) || defined(__i386__)\n    for (;;) __asm__ __volatile__( "int $0x29"'
-        )
-    
-    if text != original:
-        winnt_path.write_text(text, encoding="utf-8", newline="\n")
-        print(f"Successfully patched {winnt_path}")
-        return True
-    else:
-        print(f"No changes needed or could not pattern match in {winnt_path}")
+    # 2. Complete __fastfail replacement for ARM64EC / ARM64
+    fastfail_pattern = r'static\s+FORCEINLINE\s+DECLSPEC_NORETURN\s+void\s+__fastfail\s*\([^)]*\)\s*\{[\s\S]*?\}'
+    fastfail_replacement = '''static FORCEINLINE DECLSPEC_NORETURN void __fastfail(unsigned int code)
+{
+#if defined(__arm64ec__) || defined(__aarch64__)
+    register ULONG_PTR val __asm__("x0") = code;
+    for (;;) __asm__ __volatile__( "brk #0xf003" :: "r" (val) : "memory" );
+#elif defined(__x86_64__) || defined(__i386__)
+    for (;;) __asm__ __volatile__( "int $0x29" :: "c" ((ULONG_PTR)code) : "memory" );
+#elif defined(__arm__)
+    register ULONG_PTR val __asm__("r0") = code;
+    for (;;) __asm__ __volatile__( "udf #0xfb" :: "r" (val) : "memory" );
+#else
+    for (;;) ;
+#endif
+}'''
+    text, ff_count = re.subn(fastfail_pattern, fastfail_replacement, text, count=1)
+    print(f"Patched __fastfail in winnt.h: count={ff_count}")
+    if ff_count != 1:
+        print("Error: Failed to match and replace __fastfail in winnt.h")
         return False
+        
+    if "defined(__clang__)" not in text:
+        print("Error: Failed to patch InterlockedExchange for clang in winnt.h")
+        return False
+        
+    winnt_path.write_text(text, encoding="utf-8", newline="\n")
+    print(f"Successfully patched {winnt_path}")
+    return True
 
-def patch_tomcrypt(wine_dir: pathlib.Path):
-    patched_any = False
+def patch_tomcrypt(wine_dir: pathlib.Path) -> bool:
+    found_any = False
     for tc_path in wine_dir.glob("**/tomcrypt_macros.h"):
+        found_any = True
         text = tc_path.read_text(encoding="utf-8", errors="replace")
         original = text
         
@@ -71,9 +64,12 @@ def patch_tomcrypt(wine_dir: pathlib.Path):
         if text != original:
             tc_path.write_text(text, encoding="utf-8", newline="\n")
             print(f"Successfully patched {tc_path}")
-            patched_any = True
+        else:
+            print(f"tomcrypt_macros.h already patched or pattern matched: {tc_path}")
             
-    return patched_any
+    if not found_any:
+        print(f"Warning: No tomcrypt_macros.h found under {wine_dir}")
+    return True
 
 def main():
     wine_dir = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else pathlib.Path("third_party/hangover/wine")
@@ -81,6 +77,10 @@ def main():
     w_ok = patch_winnt(wine_dir)
     t_ok = patch_tomcrypt(wine_dir)
     print(f"Patching results: winnt.h: {w_ok}, tomcrypt: {t_ok}")
+    if not (w_ok and t_ok):
+        print("Error: Patching failed!")
+        sys.exit(1)
+    print("All ARM64EC patches applied successfully!")
 
 if __name__ == "__main__":
     main()
