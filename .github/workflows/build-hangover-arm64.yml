@@ -27,17 +27,24 @@ jobs:
           git clone --depth 1 --branch master https://github.com/AndreRH/hangover.git third_party/hangover
           git -C third_party/hangover submodule update --init --recursive --depth 1
 
+      - name: Verify Hangover Wine source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -x third_party/hangover/wine/configure
+          test -d third_party/hangover/fex
+          test -d third_party/hangover/box64
+
       - name: Install Wine build dependencies
         shell: bash
         run: |
           set -euo pipefail
           sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources || true
           sudo apt-get update
-          sudo apt-get install -y \
-            build-essential clang lld flex bison gettext pkg-config python3 curl jq unzip xz-utils zstd dpkg-dev fakeroot
+          sudo apt-get install -y build-essential clang lld flex bison gettext pkg-config python3 curl jq unzip xz-utils zstd dpkg-dev fakeroot
           sudo apt-get build-dep -y wine || true
 
-      - name: Download Linux ARM64 LLVM-MinGW cross toolchain
+      - name: Download and expose LLVM-MinGW
         shell: bash
         run: |
           set -euo pipefail
@@ -56,51 +63,40 @@ jobs:
           echo "LLVM_MINGW_ROOT=${llvm_root}" >> "$GITHUB_ENV"
           echo "${llvm_root}/bin" >> "$GITHUB_PATH"
 
-      - name: Verify Hangover Wine source
+      - name: Validate native and PE compilers
         shell: bash
         run: |
           set -euo pipefail
-          test -x third_party/hangover/wine/configure
-          test -d third_party/hangover/fex
-          test -d third_party/hangover/box64
-
-      - name: Apply upstream ARM64EC fixes
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 scripts/patch_hangover.py third_party/hangover/wine
+          command -v gcc
+          command -v clang
+          command -v aarch64-w64-mingw32-clang
+          command -v arm64ec-w64-mingw32-clang
+          command -v i686-w64-mingw32-clang
+          printf 'int main(void) { return 0; }\n' > /tmp/host-test.c
+          gcc /tmp/host-test.c -o /tmp/host-test
+          /tmp/host-test
+          printf 'int main(void) { return 0; }\n' > /tmp/pe-test.c
+          aarch64-w64-mingw32-clang /tmp/pe-test.c -o /tmp/pe-test.exe
+          file /tmp/pe-test.exe
 
       - name: Configure Hangover Wine
         working-directory: third_party/hangover/wine
+        shell: bash
         run: |
           set -euo pipefail
           command -v mkdir
-          command -v clang
-          echo "PATH=${PATH}"
+          command -v gcc
+          command -v aarch64-w64-mingw32-clang
+          command -v arm64ec-w64-mingw32-clang
           mkdir -p build
           cd build
-          ../configure \
-            --disable-tests \
-            --with-mingw=llvm-mingw \
-            --enable-archs=arm64ec,aarch64,i386
+          ../configure --disable-tests --with-mingw=clang --enable-archs=arm64ec,aarch64,i386 2>&1 | tee configure.log
+          test -f config.log
 
       - name: Build Hangover Wine
         working-directory: third_party/hangover/wine/build
         shell: bash
-        run: |
-          set -euo pipefail
-          set +e
-          make -j"$(nproc)" 2>&1 | tee build.log
-          make_status=${PIPESTATUS[0]}
-          set -e
-          if (( make_status != 0 )); then
-            failure_summary="$(grep -Eim1 '(^|[^[:alnum:]_])(fatal )?error:|^make(\[[0-9]+\])?: \*\*\*' build.log || tail -n1 build.log)"
-            failure_summary="${failure_summary//'%'/'%25'}"
-            failure_summary="${failure_summary//$'\r'/'%0D'}"
-            failure_summary="${failure_summary//$'\n'/'%0A'}"
-            echo "::error title=Hangover Wine build failure::${failure_summary}"
-            exit "${make_status}"
-          fi
+        run: make -j"$(nproc)" 2>&1 | tee build.log
 
       - name: Install runtime into staging root
         working-directory: third_party/hangover/wine/build
@@ -109,6 +105,8 @@ jobs:
           rm -rf "$GITHUB_WORKSPACE/artifacts/rootfs"
           mkdir -p "$GITHUB_WORKSPACE/artifacts/rootfs"
           make DESTDIR="$GITHUB_WORKSPACE/artifacts/rootfs" install
+          test -e "$GITHUB_WORKSPACE/artifacts/rootfs/usr/local/bin/wine"
+          file "$GITHUB_WORKSPACE/artifacts/rootfs/usr/local/bin/wine"
 
       - name: Package runtime
         run: |
