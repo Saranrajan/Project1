@@ -123,12 +123,16 @@ build_gradle = app_dir / "app/build.gradle"
 if build_gradle.is_file():
     text = build_gradle.read_text(encoding="utf-8")
     if "packagingOptions" not in text:
-        pattern = r'(ndkVersion\s+[\'"][^\'"]+[\'"])'
-        replacement = r'\1\n\n    packagingOptions {\n        jniLibs {\n            pickFirsts += [\'**/*.so\']\n        }\n    }'
-        text2, count = re.subn(pattern, replacement, text, count=1)
-        if count == 1:
-            build_gradle.write_text(text2, encoding="utf-8")
-            print("Patched app/build.gradle with packagingOptions jniLibs pickFirsts")
+        packaging_block = """
+
+    packagingOptions {
+        jniLibs {
+            pickFirsts += ['**/*.so']
+        }
+    }"""
+        text = text.replace("ndkVersion '24.0.8215888'", "ndkVersion '24.0.8215888'" + packaging_block, 1)
+        build_gradle.write_text(text, encoding="utf-8")
+        print("Patched app/build.gradle with packagingOptions jniLibs pickFirsts")
 PY
 
 echo "Applied Project1 ARM64 runtime and launcher overlays."
