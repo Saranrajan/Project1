@@ -204,8 +204,15 @@ jobs:
         env:
           ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_ROOT }}
         run: |
+          set -o pipefail
           chmod +x ./gradlew
-          ./gradlew --no-daemon --stacktrace :app:assembleDebug
+          if ! ./gradlew --no-daemon --stacktrace :app:assembleDebug 2>&1 | tee gradle-build.log; then
+            echo "::error::Gradle build failed. Diagnostic excerpt:"
+            grep -E -C 2 -i '(error:|failure|failed|exception|caused by)' gradle-build.log | tail -n 40 || true
+            echo "::error::Last 30 lines of gradle build log:"
+            tail -n 30 gradle-build.log
+            exit 1
+          fi
 
       - name: Upload final APK
         uses: actions/upload-artifact@v4
