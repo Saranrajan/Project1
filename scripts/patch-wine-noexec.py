@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Patch Wine's virtual.c to handle Android noexec filesystem on PE sections."""
+"""Patch Wine's dlls/ntdll/unix/virtual.c to handle Android noexec filesystem on PE sections."""
 import pathlib
 import re
 import sys
@@ -54,29 +54,26 @@ static int android_mprotect( void *ptr, size_t size, int unix_prot )
 
 patched_count = 0
 
-for file_path in wine_dir.rglob("*.[ch]"):
+# Target ONLY unix virtual.c files (never Windows/PE files)
+for file_path in wine_dir.rglob("unix/virtual.c"):
     try:
         content = file_path.read_text(encoding="utf-8")
     except Exception:
         continue
 
+    print(f"[patch-wine-noexec] Found target unix virtual.c: {file_path}")
+
+    if "android_mprotect" in content:
+        print(f"[patch-wine-noexec] Already patched: {file_path}")
+        patched_count += 1
+        continue
+
     if "noexec" in content.lower() and "mprotect" in content:
-        print(f"[patch-wine-noexec] Found candidate: {file_path}")
-
-        if "android_mprotect" in content:
-            print(f"[patch-wine-noexec] Already patched: {file_path}")
-            patched_count += 1
-            continue
-
-        # Find position of 'noexec'
         idx = content.lower().find("noexec")
-        # Find the mprotect call right before idx
         m_idx = content.rfind("mprotect", 0, idx)
         if m_idx != -1:
-            # Replace mprotect with android_mprotect
             new_content = content[:m_idx] + "android_mprotect" + content[m_idx + len("mprotect"):]
 
-            # Find the last #include in the file to insert helper_fn safely
             includes = list(re.finditer(r'#include\s+[<"][^>"]+[>"]', new_content))
             if includes:
                 insert_pos = includes[-1].end()
@@ -86,6 +83,34 @@ for file_path in wine_dir.rglob("*.[ch]"):
 
             file_path.write_text(new_content, encoding="utf-8")
             patched_count += 1
-            print(f"[patch-wine-noexec] Successfully patched {file_path} (mprotect replaced & helper inserted after includes)")
+            print(f"[patch-wine-noexec] Successfully patched {file_path}")
+
+# Fallback: if unix/virtual.c wasn't found, search other virtual.c in ntdll
+if patched_count == 0:
+    for file_path in wine_dir.rglob("dlls/ntdll*/virtual.c"):
+        try:
+            content = file_path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+
+        if "android_mprotect" in content:
+            patched_count += 1
+            continue
+
+        if "noexec" in content.lower() and "mprotect" in content:
+            idx = content.lower().find("noexec")
+            m_idx = content.rfind("mprotect", 0, idx)
+            if m_idx != -1:
+                new_content = content[:m_idx] + "android_mprotect" + content[m_idx + len("mprotect"):]
+                includes = list(re.finditer(r'#include\s+[<"][^>"]+[>"]', new_content))
+                if includes:
+                    insert_pos = includes[-1].end()
+                    new_content = new_content[:insert_pos] + "\n" + helper_fn + "\n" + new_content[insert_pos:]
+                else:
+                    new_content = helper_fn + "\n" + new_content
+
+                file_path.write_text(new_content, encoding="utf-8")
+                patched_count += 1
+                print(f"[patch-wine-noexec] Successfully fallback patched {file_path}")
 
 print(f"[patch-wine-noexec] Total files patched: {patched_count}")
