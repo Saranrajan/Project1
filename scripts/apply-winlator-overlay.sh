@@ -32,42 +32,33 @@ replacement = 'String command = NativeGuestDispatcher.buildCommand(rootDir, gues
 text2, count = re.subn(pattern, replacement, text, count=1)
 if count != 1:
     raise SystemExit("Could not locate upstream Box64 launch command; refusing to patch")
+
+needle_env = '        envVars.put("LD_LIBRARY_PATH", rootFS.getLibDir().getPath());\n'
+arm_env = needle_env + '''        if (NativeGuestDispatcher.isNativeArm64(rootDir, guestExecutable)) {
+            envVars.put("WINEDLLPATH", rootDir+"/usr/local/lib/wine/aarch64-unix");
+            envVars.put("WINESERVER", rootDir+"/usr/local/bin/wineserver");
+            envVars.put("LD_LIBRARY_PATH", rootDir+"/usr/local/lib:"+rootDir+"/usr/lib/aarch64-linux-gnu:"+rootDir+"/lib");
+        }\n'''
+if needle_env in text2 and 'NativeGuestDispatcher.isNativeArm64(rootDir, guestExecutable)' not in text2:
+    text2 = text2.replace(needle_env, arm_env, 1)
+else:
+    raise SystemExit("Could not locate launcher LD_LIBRARY_PATH block; refusing to patch")
 launcher.write_text(text2, encoding="utf-8")
 
 text = rootfs.read_text(encoding="utf-8")
-text2, count = re.subn(r'LATEST_VERSION = 21', 'LATEST_VERSION = 23', text, count=1)
+text2, count = re.subn(r'LATEST_VERSION = 21|LATEST_VERSION = 23', 'LATEST_VERSION = 24', text, count=1)
 if count != 1:
     raise SystemExit("Unexpected RootFSInstaller version; refusing to patch")
 
-needle = '''            boolean success = TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, activity, FILENAME, rootDir, (file, size) -> {
-'''
+needle = '''            boolean success = TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, activity, FILENAME, rootDir, (file, size) -> {\n'''
 if needle not in text2:
     raise SystemExit("Could not locate rootfs extraction block; refusing to patch")
 
-marker = '''            });
-
-            if (success) {
-'''
-replacement2 = '''            });
-
-            if (success) {
-                boolean nativeWineSuccess = TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, activity, "native_arm64_wine.tzst", rootDir);
-                File nativeWine = new File(rootDir, "/usr/local/bin/wine");
-                File nativeWineArm64 = new File(rootDir, "/usr/local/bin/wine-arm64");
-                if (nativeWine.exists()) {
-                    nativeWine.setExecutable(true, false);
-                    FileUtils.symlink("wine", nativeWineArm64.getPath());
-                }
-                File wineServer = new File(rootDir, "/usr/local/bin/wineserver");
-                if (wineServer.exists()) wineServer.setExecutable(true, false);
-                success = nativeWineSuccess;
-            }
-
-            if (success) {
-'''
-text3, count = text2.replace(marker, replacement2, 1), 1
+marker = '''            });\n\n            if (success) {\n'''
+replacement2 = '''            });\n\n            if (success) {\n                boolean nativeWineSuccess = TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, activity, "native_arm64_wine.tzst", rootDir);\n                File nativeWine = new File(rootDir, "/usr/local/bin/wine");\n                File nativeWineArm64 = new File(rootDir, "/usr/local/bin/wine-arm64");\n                if (nativeWine.exists()) {\n                    nativeWine.setExecutable(true, false);\n                    FileUtils.symlink("wine", nativeWineArm64.getPath());\n                }\n                File wineServer = new File(rootDir, "/usr/local/bin/wineserver");\n                if (wineServer.exists()) wineServer.setExecutable(true, false);\n                success = nativeWineSuccess;\n            }\n\n            if (success) {\n'''
 if marker not in text2:
     raise SystemExit("Could not locate rootfs success block; refusing to patch")
+text3 = text2.replace(marker, replacement2, 1)
 rootfs.write_text(text3, encoding="utf-8")
 
 # Fix upstream missing IntArray_indexOf in C/C++ runtime (required by gladiorenderer)
