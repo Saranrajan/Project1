@@ -59,38 +59,55 @@ static inline int android_mprotect( void *ptr, size_t size, int unix_prot )
 }
 '''
 
-for file_path in wine_dir.rglob("virtual.c"):
+for file_path in wine_dir.rglob("*.c"):
     try:
         content = file_path.read_text(encoding="utf-8")
     except Exception:
         continue
 
-    if "noexec filesystem" in content:
-        print(f"Found virtual.c target: {file_path}")
+    if "map_image_into_view" in content:
+        print(f"Found map_image_into_view in: {file_path}")
 
         if "android_mprotect" in content:
             print(f"Already patched: {file_path}")
             patched_count += 1
             continue
 
-        # Find position of "noexec filesystem"
-        pos = content.find("noexec filesystem")
-        mprot_pos = content.rfind("mprotect(", 0, pos)
-        if mprot_pos == -1:
-            print(f"Error: Could not find mprotect before 'noexec filesystem' in {file_path}", file=sys.stderr)
+        # Find start of map_image_into_view
+        func_pos = content.find("map_image_into_view")
+        # Find opening brace of the function
+        brace_pos = content.find("{", func_pos)
+        if brace_pos == -1:
+            print(f"Could not find opening brace for map_image_into_view in {file_path}")
             continue
 
-        # Replace ONLY that specific mprotect call
-        new_content = content[:mprot_pos] + "android_mprotect(" + content[mprot_pos + len("mprotect("):]
+        # Find the end of map_image_into_view by tracking brace depth
+        depth = 0
+        end_pos = -1
+        for i in range(brace_pos, len(content)):
+            if content[i] == '{':
+                depth += 1
+            elif content[i] == '}':
+                depth -= 1
+                if depth == 0:
+                    end_pos = i + 1
+                    break
 
-        # Insert helper_code at top of file
-        new_content = helper_code + "\n" + new_content
+        if end_pos == -1:
+            print(f"Could not find closing brace for map_image_into_view in {file_path}")
+            continue
+
+        func_body = content[brace_pos:end_pos]
+        # Replace mprotect inside map_image_into_view ONLY
+        patched_func_body = func_body.replace("mprotect(", "android_mprotect(")
+
+        new_content = helper_code + "\n" + content[:brace_pos] + patched_func_body + content[end_pos:]
 
         file_path.write_text(new_content, encoding="utf-8")
         patched_count += 1
-        print(f"Successfully targeted and patched map_image_into_view in {file_path}")
+        print(f"Successfully patched map_image_into_view in {file_path}")
 
 print(f"Total files patched: {patched_count}")
 if patched_count == 0:
-    print("Error: Could not locate any Wine source file with 'noexec filesystem'", file=sys.stderr)
+    print("Error: Could not locate map_image_into_view in any Wine source file", file=sys.stderr)
     sys.exit(1)
