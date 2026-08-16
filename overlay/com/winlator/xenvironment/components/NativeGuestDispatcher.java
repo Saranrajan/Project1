@@ -24,27 +24,86 @@ public final class NativeGuestDispatcher {
         String box64Command = rootDir + "/usr/local/bin/box64 " + guestExecutable;
         if (guestExecutable == null || guestExecutable.isEmpty()) return box64Command;
 
-        File nativeWine = new File(rootDir, "/usr/local/bin/wine-arm64");
-        if (!nativeWine.isFile() || !nativeWine.canExecute()) return box64Command;
+        File nativeWine = findNativeWine(rootDir);
+        if (nativeWine == null) return box64Command;
 
         String[] tokens = ProcessHelper.splitCommand(guestExecutable);
         for (int i = 0; i < tokens.length; i++) {
-            File candidate = new File(stripQuotes(tokens[i]));
-            try {
-                if (candidate.isFile() && readPEMachine(candidate) == PE_ARM64) {
-                    StringBuilder command = new StringBuilder(nativeWine.getPath());
-                    for (int j = i; j < tokens.length; j++) {
-                        command.append(' ').append(tokens[j]);
+            File candidate = resolvePath(rootDir, tokens[i]);
+            if (candidate != null) {
+                try {
+                    if (readPEMachine(candidate) == PE_ARM64) {
+                        StringBuilder command = new StringBuilder(nativeWine.getPath());
+                        for (int j = 0; j < tokens.length; j++) {
+                            if (j == 0 && (tokens[0].equals("wine") || tokens[0].endsWith("/wine"))) {
+                                continue;
+                            }
+                            command.append(' ').append(tokens[j]);
+                        }
+                        return command.toString();
                     }
-                    return command.toString();
                 }
-            }
-            catch (IOException ignored) {
-                // Keep scanning; the candidate may be a Linux Wine helper.
+                catch (IOException ignored) {
+                    // Keep scanning
+                }
             }
         }
 
         return box64Command;
+    }
+
+    private static File findNativeWine(File rootDir) {
+        File[] candidates = {
+            new File(rootDir, "/usr/local/bin/wine-arm64"),
+            new File(rootDir, "/usr/local/bin/wine"),
+            new File(rootDir, "/usr/local/bin/wine64")
+        };
+        for (File candidate : candidates) {
+            if (candidate.isFile()) {
+                if (!candidate.canExecute()) candidate.setExecutable(true, false);
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    public static File resolvePath(File rootDir, String rawToken) {
+        if (rawToken == null) return null;
+        String token = stripQuotes(rawToken).trim();
+        if (token.isEmpty()) return null;
+
+        File f = new File(token);
+        if (f.isFile()) return f;
+
+        f = new File(rootDir, token);
+        if (f.isFile()) return f;
+
+        // Handle C:\...
+        if (token.length() >= 3 && (token.charAt(0) == 'C' || token.charAt(0) == 'c') && token.charAt(1) == ':') {
+            String rel = token.substring(2).replace('\\', '/');
+            f = new File(rootDir, "home/xuser/.wine/drive_c" + (rel.startsWith("/") ? rel : "/" + rel));
+            if (f.isFile()) return f;
+        }
+
+        // Handle D:\...
+        if (token.length() >= 3 && (token.charAt(0) == 'D' || token.charAt(0) == 'd') && token.charAt(1) == ':') {
+            String rel = token.substring(2).replace('\\', '/');
+            f = new File(rootDir, "home/xuser/.wine/dosdevices/d:" + (rel.startsWith("/") ? rel : "/" + rel));
+            if (f.isFile()) return f;
+            f = new File("/storage/emulated/0/Download" + (rel.startsWith("/") ? rel : "/" + rel));
+            if (f.isFile()) return f;
+            f = new File("/sdcard/Download" + (rel.startsWith("/") ? rel : "/" + rel));
+            if (f.isFile()) return f;
+        }
+
+        // Handle Z:\...
+        if (token.length() >= 3 && (token.charAt(0) == 'Z' || token.charAt(0) == 'z') && token.charAt(1) == ':') {
+            String rel = token.substring(2).replace('\\', '/');
+            f = new File(rootDir, rel);
+            if (f.isFile()) return f;
+        }
+
+        return null;
     }
 
     private static String stripQuotes(String value) {

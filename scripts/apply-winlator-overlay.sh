@@ -35,7 +35,7 @@ if count != 1:
 launcher.write_text(text2, encoding="utf-8")
 
 text = rootfs.read_text(encoding="utf-8")
-text2, count = re.subn(r'LATEST_VERSION = 21', 'LATEST_VERSION = 22', text, count=1)
+text2, count = re.subn(r'LATEST_VERSION = 21', 'LATEST_VERSION = 23', text, count=1)
 if count != 1:
     raise SystemExit("Unexpected RootFSInstaller version; refusing to patch")
 
@@ -52,6 +52,14 @@ replacement2 = '''            });
 
             if (success) {
                 boolean nativeWineSuccess = TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, activity, "native_arm64_wine.tzst", rootDir);
+                File nativeWine = new File(rootDir, "/usr/local/bin/wine");
+                File nativeWineArm64 = new File(rootDir, "/usr/local/bin/wine-arm64");
+                if (nativeWine.exists()) {
+                    nativeWine.setExecutable(true, false);
+                    FileUtils.symlink("wine", nativeWineArm64.getPath());
+                }
+                File wineServer = new File(rootDir, "/usr/local/bin/wineserver");
+                if (wineServer.exists()) wineServer.setExecutable(true, false);
                 success = nativeWineSuccess;
             }
 

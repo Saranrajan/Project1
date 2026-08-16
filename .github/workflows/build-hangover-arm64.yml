@@ -105,7 +105,10 @@ jobs:
           rm -rf "$GITHUB_WORKSPACE/artifacts/rootfs"
           mkdir -p "$GITHUB_WORKSPACE/artifacts/rootfs"
           make DESTDIR="$GITHUB_WORKSPACE/artifacts/rootfs" install
+          ln -sf wine "$GITHUB_WORKSPACE/artifacts/rootfs/usr/local/bin/wine-arm64"
+          chmod +x "$GITHUB_WORKSPACE/artifacts/rootfs/usr/local/bin/wine" "$GITHUB_WORKSPACE/artifacts/rootfs/usr/local/bin/wine-arm64" "$GITHUB_WORKSPACE/artifacts/rootfs/usr/local/bin/wineserver"
           test -e "$GITHUB_WORKSPACE/artifacts/rootfs/usr/local/bin/wine"
+          test -e "$GITHUB_WORKSPACE/artifacts/rootfs/usr/local/bin/wine-arm64"
           file "$GITHUB_WORKSPACE/artifacts/rootfs/usr/local/bin/wine"
 
       - name: Package runtime
