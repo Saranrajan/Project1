@@ -90,6 +90,7 @@ jobs:
           command -v aarch64-w64-mingw32-clang
           command -v arm64ec-w64-mingw32-clang
           python3 "$GITHUB_WORKSPACE/scripts/patch-wine-tmpdir.py" "$PWD"
+          python3 "$GITHUB_WORKSPACE/scripts/patch-wine-noexec.py" "$PWD"
           mkdir -p build
           cd build
           ../configure --disable-tests --with-mingw=clang --enable-archs=arm64ec,aarch64,i386 2>&1 | tee configure.log
@@ -204,7 +205,7 @@ jobs:
           test -f winlator-app/app/src/main/assets/native_arm64_wine.tzst
           grep -q 'NativeGuestDispatcher.buildCommand' winlator-app/app/src/main/java/com/winlator/xenvironment/components/GuestProgramLauncherComponent.java
           grep -q 'native_arm64_wine.tzst' winlator-app/app/src/main/java/com/winlator/xenvironment/RootFSInstaller.java
-          grep -q 'LATEST_VERSION = 28' winlator-app/app/src/main/java/com/winlator/xenvironment/RootFSInstaller.java
+          grep -q 'LATEST_VERSION = 29' winlator-app/app/src/main/java/com/winlator/xenvironment/RootFSInstaller.java
 
       - name: Build debug APK
         working-directory: winlator-app
