@@ -110,26 +110,44 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/artifacts/rootfs"
           make DESTDIR="$GITHUB_WORKSPACE/artifacts/rootfs" install
           ln -sf wine "$GITHUB_WORKSPACE/artifacts/rootfs/usr/local/bin/wine-arm64"
-          chmod +x "$GITHUB_WORKSPACE/artifacts/rootfs/usr/local/bin/wine" "$GITHUB_WORKSPACE/artifacts/rootfs/usr/local/bin/wine-arm64" "$GITHUB_WORKSPACE/artifacts/rootfs/usr/local/bin/wineserver"
+          chmod +x "$GITHUB_WORKSPACE/artifacts/rootfs/usr/local/bin/wine" "$GITHUB_WORKSPACE/artifacts/rootfs/usr/local/bin/wine-arm64" "$GITHUB_WORKSPACE/artifacts/rootfs/usr/local/bin/wineserver" || true
 
           runtime_root="$GITHUB_WORKSPACE/artifacts/rootfs"
-          interpreter="$runtime_root/lib/ld-linux-aarch64.so.1"
-          native_rpath='$ORIGIN/../lib:$ORIGIN/../../lib/aarch64-linux-gnu'
-          test -e "$interpreter"
+          android_interpreter="/data/data/com.winlator/files/rootfs/lib/ld-linux-aarch64.so.1"
+          native_rpath='$ORIGIN/../lib:$ORIGIN/../../lib/aarch64-linux-gnu:$ORIGIN/../../../lib'
 
+          # The Android/glibc loader lives in Winlator's base rootfs, not in this
+          # standalone Hangover artifact. Do not require it to exist in CI here.
+          patched=0
           while IFS= read -r elf; do
-            if file -b "$elf" | grep -qE 'ELF 64-bit LSB.*ARM aarch64'; then
-              echo "Patching Android loader/rpath: $elf"
-              patchelf --set-interpreter "/data/data/com.winlator/files/rootfs/lib/ld-linux-aarch64.so.1" --set-rpath "$native_rpath" "$elf"
+            resolved="$elf"
+            if [ -L "$elf" ]; then
+              resolved="$(readlink -f "$elf")"
             fi
-          done < <(find "$runtime_root/usr/local/bin" -type f -perm -u+x -print)
+            if file -b "$resolved" | grep -qE 'ELF 64-bit LSB.*ARM aarch64'; then
+              echo "Patching Android loader/rpath: $resolved"
+              patchelf --set-interpreter "$android_interpreter" --set-rpath "$native_rpath" "$resolved"
+              patched=$((patched + 1))
+            fi
+          done < <(find "$runtime_root/usr/local/bin" -type f -print)
+
+          test "$patched" -gt 0
 
           for required in wine wineserver wine-arm64; do
             path="$runtime_root/usr/local/bin/$required"
             test -e "$path"
-            file "$path"
-            readelf -l "$path" | grep -A1 'Requesting program interpreter'
-            patchelf --print-rpath "$path"
+            resolved="$path"
+            if [ -L "$path" ]; then
+              resolved="$(readlink -f "$path")"
+            fi
+            if file -b "$resolved" | grep -qE 'ELF 64-bit LSB.*ARM aarch64'; then
+              echo "Verified $required -> $resolved"
+              echo "interpreter: $(patchelf --print-interpreter "$resolved")"
+              echo "rpath: $(patchelf --print-rpath "$resolved")"
+              test "$(patchelf --print-interpreter "$resolved")" = "$android_interpreter"
+            else
+              echo "$required resolves to non-ELF wrapper/script: $resolved"
+            fi
           done
 
       - name: Package runtime artifact
