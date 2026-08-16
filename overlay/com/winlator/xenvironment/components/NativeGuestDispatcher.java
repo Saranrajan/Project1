@@ -23,9 +23,17 @@ public final class NativeGuestDispatcher {
         StringBuilder command = new StringBuilder(nativeWine.getPath());
         for (int j = 0; j < tokens.length; j++) {
             if (j == 0 && (tokens[0].equals("wine") || tokens[0].endsWith("/wine"))) continue;
-            command.append(' ').append(tokens[j]);
+            command.append(' ').append(quoteIfNeeded(tokens[j]));
         }
         return command.toString();
+    }
+
+    private static String quoteIfNeeded(String arg) {
+        if (arg == null || arg.isEmpty()) return "\"\"";
+        if (arg.contains(" ") && !arg.startsWith("\"") && !arg.startsWith("'")) {
+            return "\"" + arg + "\"";
+        }
+        return arg;
     }
 
     /** Returns true only when the guest command contains a real native ARM64 PE (Machine 0xAA64). */
