@@ -88,6 +88,7 @@ jobs:
           command -v gcc
           command -v aarch64-w64-mingw32-clang
           command -v arm64ec-w64-mingw32-clang
+          python3 "$GITHUB_WORKSPACE/scripts/patch-wine-tmpdir.py" "$PWD"
           mkdir -p build
           cd build
           ../configure --disable-tests --with-mingw=clang --enable-archs=arm64ec,aarch64,i386 2>&1 | tee configure.log

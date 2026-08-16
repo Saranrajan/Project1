@@ -69,6 +69,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python3 "$GITHUB_WORKSPACE/scripts/patch-wine-tmpdir.py" "$PWD"
           mkdir -p build
           cd build
           ../configure --disable-tests --with-mingw=clang --enable-archs=arm64ec,aarch64,i386

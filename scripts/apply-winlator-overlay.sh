@@ -36,6 +36,7 @@ if count != 1:
 needle_env = '        envVars.put("LD_LIBRARY_PATH", rootFS.getLibDir().getPath());\n'
 arm_env = needle_env + '''        File nativeWine = new File(rootDir, "/usr/local/bin/wine");
         if (nativeWine.exists()) {
+            envVars.put("WINELOADERNOEXEC", "1");
             envVars.put("WINEDLLPATH", rootDir+"/usr/local/lib/wine/aarch64-unix");
             envVars.put("WINESERVER", rootDir+"/usr/local/bin/wineserver");
             envVars.put("WINELOADER", rootDir+"/usr/local/bin/wine");
@@ -48,7 +49,7 @@ else:
 launcher.write_text(text2, encoding="utf-8")
 
 text = rootfs.read_text(encoding="utf-8")
-text2, count = re.subn(r'LATEST_VERSION = 21|LATEST_VERSION = 23|LATEST_VERSION = 24|LATEST_VERSION = 25', 'LATEST_VERSION = 26', text, count=1)
+text2, count = re.subn(r'LATEST_VERSION = 21|LATEST_VERSION = 23|LATEST_VERSION = 24|LATEST_VERSION = 25|LATEST_VERSION = 26', 'LATEST_VERSION = 27', text, count=1)
 if count != 1:
     raise SystemExit("Unexpected RootFSInstaller version; refusing to patch")
 
