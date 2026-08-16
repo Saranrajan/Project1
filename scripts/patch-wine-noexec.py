@@ -59,7 +59,8 @@ for file_path in wine_dir.rglob("unix/virtual.c"):
             }
         }"""
                 new_content = (
-                    content[:brace_pos + 1]
+                    "#include <errno.h>\n#include <string.h>\n#include <sys/mman.h>\n"
+                    + content[:brace_pos + 1]
                     + fallback
                     + content[brace_pos + 1:close_b + 1]
                     + "\n    noexec_ok: ;"

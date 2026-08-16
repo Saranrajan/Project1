@@ -101,7 +101,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          make -j"$(nproc)" 2>&1 | tee build.log
+          if ! make -j"$(nproc)" 2>&1 | tee build.log; then
+            echo "=== MAKE FAILED: DUMPING ERRORS ==="
+            grep -E "(error:|undefined reference|fatal error:)" build.log | head -n 30 || tail -n 50 build.log
+            exit 1
+          fi
 
       - name: Stage runtime and patch Android ELF loader paths
         working-directory: third_party/hangover/wine/build
@@ -205,7 +209,7 @@ jobs:
           test -f winlator-app/app/src/main/assets/native_arm64_wine.tzst
           grep -q 'NativeGuestDispatcher.buildCommand' winlator-app/app/src/main/java/com/winlator/xenvironment/components/GuestProgramLauncherComponent.java
           grep -q 'native_arm64_wine.tzst' winlator-app/app/src/main/java/com/winlator/xenvironment/RootFSInstaller.java
-          grep -q 'LATEST_VERSION = 40' winlator-app/app/src/main/java/com/winlator/xenvironment/RootFSInstaller.java
+          grep -q 'LATEST_VERSION = 41' winlator-app/app/src/main/java/com/winlator/xenvironment/RootFSInstaller.java
 
       - name: Build debug APK
         working-directory: winlator-app
