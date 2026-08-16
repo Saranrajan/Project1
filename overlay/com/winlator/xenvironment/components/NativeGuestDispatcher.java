@@ -13,19 +13,18 @@ public final class NativeGuestDispatcher {
     private NativeGuestDispatcher() {}
 
     public static String buildCommand(File rootDir, String guestExecutable) {
-        String box64Command = rootDir + "/usr/local/bin/box64 " + guestExecutable;
-        if (!isNativeArm64(rootDir, guestExecutable)) return box64Command;
-
         File nativeWine = findNativeWine(rootDir);
-        if (nativeWine == null) return box64Command;
-
-        String[] tokens = ProcessHelper.splitCommand(guestExecutable);
-        StringBuilder command = new StringBuilder(nativeWine.getPath());
-        for (int j = 0; j < tokens.length; j++) {
-            if (j == 0 && (tokens[0].equals("wine") || tokens[0].endsWith("/wine"))) continue;
-            command.append(' ').append(quoteIfNeeded(tokens[j]));
+        if (nativeWine != null) {
+            String[] tokens = ProcessHelper.splitCommand(guestExecutable);
+            StringBuilder command = new StringBuilder(nativeWine.getPath());
+            for (int j = 0; j < tokens.length; j++) {
+                if (j == 0 && (tokens[0].equals("wine") || tokens[0].endsWith("/wine"))) continue;
+                command.append(' ').append(quoteIfNeeded(tokens[j]));
+            }
+            return command.toString();
         }
-        return command.toString();
+
+        return rootDir + "/usr/local/bin/box64 " + guestExecutable;
     }
 
     private static String quoteIfNeeded(String arg) {

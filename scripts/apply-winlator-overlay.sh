@@ -34,19 +34,21 @@ if count != 1:
     raise SystemExit("Could not locate upstream Box64 launch command; refusing to patch")
 
 needle_env = '        envVars.put("LD_LIBRARY_PATH", rootFS.getLibDir().getPath());\n'
-arm_env = needle_env + '''        if (NativeGuestDispatcher.isNativeArm64(rootDir, guestExecutable)) {
+arm_env = needle_env + '''        File nativeWine = new File(rootDir, "/usr/local/bin/wine");
+        if (nativeWine.exists()) {
             envVars.put("WINEDLLPATH", rootDir+"/usr/local/lib/wine/aarch64-unix");
             envVars.put("WINESERVER", rootDir+"/usr/local/bin/wineserver");
-            envVars.put("LD_LIBRARY_PATH", rootDir+"/usr/local/lib:"+rootDir+"/usr/lib/aarch64-linux-gnu:"+rootDir+"/lib");
+            envVars.put("WINELOADER", rootDir+"/usr/local/bin/wine");
+            envVars.put("LD_LIBRARY_PATH", rootDir+"/usr/local/lib:"+rootDir+"/usr/local/lib/wine/aarch64-unix:"+rootDir+"/usr/lib/aarch64-linux-gnu:"+rootDir+"/lib:"+rootFS.getLibDir().getPath());
         }\n'''
-if needle_env in text2 and 'NativeGuestDispatcher.isNativeArm64(rootDir, guestExecutable)' not in text2:
+if needle_env in text2:
     text2 = text2.replace(needle_env, arm_env, 1)
 else:
     raise SystemExit("Could not locate launcher LD_LIBRARY_PATH block; refusing to patch")
 launcher.write_text(text2, encoding="utf-8")
 
 text = rootfs.read_text(encoding="utf-8")
-text2, count = re.subn(r'LATEST_VERSION = 21|LATEST_VERSION = 23|LATEST_VERSION = 24', 'LATEST_VERSION = 25', text, count=1)
+text2, count = re.subn(r'LATEST_VERSION = 21|LATEST_VERSION = 23|LATEST_VERSION = 24|LATEST_VERSION = 25', 'LATEST_VERSION = 26', text, count=1)
 if count != 1:
     raise SystemExit("Unexpected RootFSInstaller version; refusing to patch")
 
@@ -55,7 +57,7 @@ if needle not in text2:
     raise SystemExit("Could not locate rootfs extraction block; refusing to patch")
 
 marker = '''            });\n\n            if (success) {\n'''
-replacement2 = '''            });\n\n            if (success) {\n                boolean nativeWineSuccess = TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, activity, "native_arm64_wine.tzst", rootDir);\n                File nativeWine = new File(rootDir, "/usr/local/bin/wine");\n                File nativeWineArm64 = new File(rootDir, "/usr/local/bin/wine-arm64");\n                if (nativeWine.exists()) {\n                    nativeWine.setExecutable(true, false);\n                    FileUtils.symlink("wine", nativeWineArm64.getPath());\n                }\n                File wineServer = new File(rootDir, "/usr/local/bin/wineserver");\n                if (wineServer.exists()) wineServer.setExecutable(true, false);\n                File wine64 = new File(rootDir, "/usr/local/bin/wine64");\n                if (wine64.exists()) wine64.setExecutable(true, false);\n                File unixWine = new File(rootDir, "/usr/local/lib/wine/aarch64-unix/wine");\n                if (unixWine.exists()) unixWine.setExecutable(true, false);\n                File unixPreloader = new File(rootDir, "/usr/local/lib/wine/aarch64-unix/wine-preloader");\n                if (unixPreloader.exists()) unixPreloader.setExecutable(true, false);\n                success = nativeWineSuccess;\n            }\n\n            if (success) {\n'''
+replacement2 = '''            });\n\n            if (success) {\n                boolean nativeWineSuccess = TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, activity, "native_arm64_wine.tzst", rootDir);\n                File nativeWine = new File(rootDir, "/usr/local/bin/wine");\n                File nativeWineArm64 = new File(rootDir, "/usr/local/bin/wine-arm64");\n                if (nativeWine.exists()) {\n                    nativeWine.setExecutable(true, false);\n                    FileUtils.symlink("wine", nativeWineArm64.getPath());\n                }\n                File wineServer = new File(rootDir, "/usr/local/bin/wineserver");\n                if (wineServer.exists()) wineServer.setExecutable(true, false);\n                File wine64 = new File(rootDir, "/usr/local/bin/wine64");\n                if (wine64.exists()) wine64.setExecutable(true, false);\n                File unixWine = new File(rootDir, "/usr/local/lib/wine/aarch64-unix/wine");\n                if (unixWine.exists()) unixWine.setExecutable(true, false);\n                File unixPreloader = new File(rootDir, "/usr/local/lib/wine/aarch64-unix/wine-preloader");\n                if (unixPreloader.exists()) unixPreloader.setExecutable(true, false);\n                File optWineBin = new File(rootDir, "/opt/wine/bin/wine");\n                File optWineServer = new File(rootDir, "/opt/wine/bin/wineserver");\n                if (optWineBin.exists()) {\n                    optWineBin.delete();\n                    FileUtils.symlink("../../usr/local/bin/wine", optWineBin.getPath());\n                }\n                if (optWineServer.exists()) {\n                    optWineServer.delete();\n                    FileUtils.symlink("../../usr/local/bin/wineserver", optWineServer.getPath());\n                }\n                success = nativeWineSuccess;\n            }\n\n            if (success) {\n'''
 if marker not in text2:
     raise SystemExit("Could not locate rootfs success block; refusing to patch")
 text3 = text2.replace(marker, replacement2, 1)
