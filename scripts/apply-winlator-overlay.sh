@@ -49,7 +49,7 @@ else:
 launcher.write_text(text2, encoding="utf-8")
 
 text = rootfs.read_text(encoding="utf-8")
-text2, count = re.subn(r'LATEST_VERSION = 21|LATEST_VERSION = 23|LATEST_VERSION = 24|LATEST_VERSION = 25|LATEST_VERSION = 26', 'LATEST_VERSION = 27', text, count=1)
+text2, count = re.subn(r'LATEST_VERSION = 21|LATEST_VERSION = 23|LATEST_VERSION = 24|LATEST_VERSION = 25|LATEST_VERSION = 26|LATEST_VERSION = 27', 'LATEST_VERSION = 28', text, count=1)
 if count != 1:
     raise SystemExit("Unexpected RootFSInstaller version; refusing to patch")
 

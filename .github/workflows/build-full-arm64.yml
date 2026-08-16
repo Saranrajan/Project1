@@ -204,7 +204,7 @@ jobs:
           test -f winlator-app/app/src/main/assets/native_arm64_wine.tzst
           grep -q 'NativeGuestDispatcher.buildCommand' winlator-app/app/src/main/java/com/winlator/xenvironment/components/GuestProgramLauncherComponent.java
           grep -q 'native_arm64_wine.tzst' winlator-app/app/src/main/java/com/winlator/xenvironment/RootFSInstaller.java
-          grep -q 'LATEST_VERSION = 27' winlator-app/app/src/main/java/com/winlator/xenvironment/RootFSInstaller.java
+          grep -q 'LATEST_VERSION = 28' winlator-app/app/src/main/java/com/winlator/xenvironment/RootFSInstaller.java
 
       - name: Build debug APK
         working-directory: winlator-app
