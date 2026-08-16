@@ -110,44 +110,12 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/artifacts/rootfs"
           make DESTDIR="$GITHUB_WORKSPACE/artifacts/rootfs" install
           ln -sf wine "$GITHUB_WORKSPACE/artifacts/rootfs/usr/local/bin/wine-arm64"
-          chmod +x "$GITHUB_WORKSPACE/artifacts/rootfs/usr/local/bin/wine" "$GITHUB_WORKSPACE/artifacts/rootfs/usr/local/bin/wine-arm64" "$GITHUB_WORKSPACE/artifacts/rootfs/usr/local/bin/wineserver" || true
-
-          runtime_root="$GITHUB_WORKSPACE/artifacts/rootfs"
-          android_interpreter="/data/data/com.winlator/files/rootfs/lib/ld-linux-aarch64.so.1"
-          native_rpath='$ORIGIN/../lib:$ORIGIN/../../lib/aarch64-linux-gnu:$ORIGIN/../../../lib'
-
-          # The Android/glibc loader lives in Winlator's base rootfs, not in this
-          # standalone Hangover artifact. Do not require it to exist in CI here.
-          patched=0
-          while IFS= read -r elf; do
-            resolved="$elf"
-            if [ -L "$elf" ]; then
-              resolved="$(readlink -f "$elf")"
-            fi
-            if file -b "$resolved" | grep -qE 'ELF 64-bit LSB.*ARM aarch64'; then
-              echo "Patching Android loader/rpath: $resolved"
-              patchelf --set-interpreter "$android_interpreter" --set-rpath "$native_rpath" "$resolved"
-              patched=$((patched + 1))
-            fi
-          done < <(find "$runtime_root/usr/local/bin" -type f -print)
-
-          test "$patched" -gt 0
+          chmod +x "$GITHUB_WORKSPACE/scripts/patch-arm64-runtime.sh"
+          "$GITHUB_WORKSPACE/scripts/patch-arm64-runtime.sh" "$GITHUB_WORKSPACE/artifacts/rootfs"
 
           for required in wine wineserver wine-arm64; do
-            path="$runtime_root/usr/local/bin/$required"
+            path="$GITHUB_WORKSPACE/artifacts/rootfs/usr/local/bin/$required"
             test -e "$path"
-            resolved="$path"
-            if [ -L "$path" ]; then
-              resolved="$(readlink -f "$path")"
-            fi
-            if file -b "$resolved" | grep -qE 'ELF 64-bit LSB.*ARM aarch64'; then
-              echo "Verified $required -> $resolved"
-              echo "interpreter: $(patchelf --print-interpreter "$resolved")"
-              echo "rpath: $(patchelf --print-rpath "$resolved")"
-              test "$(patchelf --print-interpreter "$resolved")" = "$android_interpreter"
-            else
-              echo "$required resolves to non-ELF wrapper/script: $resolved"
-            fi
           done
 
       - name: Package runtime artifact
@@ -235,7 +203,7 @@ jobs:
           test -f winlator-app/app/src/main/assets/native_arm64_wine.tzst
           grep -q 'NativeGuestDispatcher.buildCommand' winlator-app/app/src/main/java/com/winlator/xenvironment/components/GuestProgramLauncherComponent.java
           grep -q 'native_arm64_wine.tzst' winlator-app/app/src/main/java/com/winlator/xenvironment/RootFSInstaller.java
-          grep -q 'LATEST_VERSION = 24' winlator-app/app/src/main/java/com/winlator/xenvironment/RootFSInstaller.java
+          grep -q 'LATEST_VERSION = 25' winlator-app/app/src/main/java/com/winlator/xenvironment/RootFSInstaller.java
 
       - name: Build debug APK
         working-directory: winlator-app

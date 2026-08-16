@@ -15,7 +15,7 @@ patched=0
 seen=""
 
 patch_one() {
-    local path="$1" target kind interp
+    local path="$1" target kind old_interp interp
     [ -e "$path" ] || return 0
     target="$(readlink -f "$path")"
     [ -f "$target" ] || return 0
@@ -28,13 +28,19 @@ patch_one() {
     kind="$(file -b "$target" || true)"
     case "$kind" in
         *"ELF 64-bit LSB"*"ARM aarch64"*)
-            echo "Patching ARM64 ELF: $target"
-            echo "  before: $(patchelf --print-interpreter "$target" 2>/dev/null || echo '<none>')"
-            patchelf --set-interpreter "$INTERPRETER" --set-rpath "$RPATH" "$target"
-            interp="$(patchelf --print-interpreter "$target")"
-            test "$interp" = "$INTERPRETER"
-            echo "  after:  $interp"
-            echo "  rpath:  $(patchelf --print-rpath "$target")"
+            old_interp="$(patchelf --print-interpreter "$target" 2>/dev/null || true)"
+            if [ -n "$old_interp" ]; then
+                echo "Patching ARM64 ELF executable: $target"
+                echo "  before: $old_interp"
+                patchelf --set-interpreter "$INTERPRETER" --set-rpath "$RPATH" "$target"
+                interp="$(patchelf --print-interpreter "$target")"
+                test "$interp" = "$INTERPRETER"
+                echo "  after:  $interp"
+                echo "  rpath:  $(patchelf --print-rpath "$target")"
+            else
+                echo "Patching ARM64 ELF library: $target"
+                patchelf --set-rpath "$RPATH" "$target" 2>/dev/null || true
+            fi
             patched=$((patched + 1))
             ;;
         *)
@@ -42,14 +48,16 @@ patch_one() {
     esac
 }
 
-# Explicitly cover Wine launch binaries, then all ELF helper binaries.
+# Explicitly cover Wine launch binaries across bin and lib/wine directories
 for name in wine wine64 wineserver wine-preloader wine64-preloader wine-arm64; do
     patch_one "$BIN_DIR/$name"
+    patch_one "$ROOTFS/usr/local/lib/wine/aarch64-unix/$name"
 done
 
+# Recursively patch all ELF files in usr/local
 while IFS= read -r -d '' path; do
     patch_one "$path"
-done < <(find "$BIN_DIR" -maxdepth 1 -type f -print0)
+done < <(find "$ROOTFS/usr/local" -type f -print0)
 
 if [ "$patched" -eq 0 ]; then
     echo "ERROR: no ARM64 ELF Wine/helper binaries were patched" >&2
