@@ -1,135 +1,119 @@
 #!/usr/bin/env python3
-"""Patch Wine's PE loader in dlls/ntdll/unix/virtual.c to handle Android noexec filesystems.
+"""Patch Wine's dlls/ntdll/unix/virtual.c with an Android-compatible mprotect wrapper.
 
-On Android, application storage (/data/data/com.winlator) blocks mprotect(PROT_EXEC)
-on file-backed mmap regions due to SELinux W^X policies.
+On Android, /data is mounted with SELinux policies that prevent file-backed mprotect(PROT_EXEC).
+When Wine loads a PE image (ntdll.dll, kernel32.dll, apps), setting PROT_EXEC fails.
 
-When Wine loads a PE image (ntdll.dll, kernel32.dll, or an ARM64/ARM64EC exe),
-setting PROT_EXEC on file-backed .text sections fails with EACCES/EPERM ("noexec filesystem?").
-
-This script patches virtual.c to intercept mprotect failures on executable sections,
-save the section data to a temporary buffer, remap the range with MAP_ANONYMOUS,
-restore the data, and successfully apply PROT_EXEC.
+We define android_mprotect() which falls back to remapping the section as MAP_ANONYMOUS
+and copying the contents, which Android allows PROT_EXEC on.
 """
 import pathlib
-import sys
 import re
+import sys
 
 wine_dir = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "third_party/hangover/wine")
-virtual_c = wine_dir / "dlls" / "ntdll" / "unix" / "virtual.c"
+if not wine_dir.is_dir():
+    print(f"Error: {wine_dir} is not a directory", file=sys.stderr)
+    sys.exit(1)
 
-if not virtual_c.is_file():
-    for alt in [wine_dir / "dlls/ntdll/virtual.c"]:
-        if alt.is_file():
-            virtual_c = alt
-            break
-    else:
-        print(f"Error: {virtual_c} not found", file=sys.stderr)
-        sys.exit(1)
+patched_count = 0
 
-print(f"Patching: {virtual_c}")
-content = virtual_c.read_text(encoding="utf-8")
-original = content
-
-# Search for the mprotect check in map_image_into_view
-# Typical pattern in Wine ntdll virtual.c:
-#
-# if (mprotect( ptr, size, unix_prot ) == -1)
-# {
-#     ERR( "failed to set %08x protection on %s section %s, noexec filesystem?\n", ... );
-#     return STATUS_INVALID_IMAGE_FORMAT;
-# }
-
-replacement_code = """if (mprotect( ptr, size, unix_prot ) == -1)
+helper_code = '''
+/* Android W^X / noexec filesystem compatibility wrapper */
+static inline int android_mprotect( void *ptr, size_t size, int unix_prot )
+{
+    if (mprotect( ptr, size, unix_prot ) == 0) return 0;
+    if ((errno == EACCES || errno == EPERM) && (unix_prot & PROT_EXEC))
     {
-        /* Android noexec fallback: convert file-backed mapping to anonymous memory */
-        if ((errno == EACCES || errno == EPERM) && (unix_prot & PROT_EXEC))
+        void *tmp_buf = malloc( size );
+        if (tmp_buf)
         {
-            void *tmp_buf = malloc( size );
-            if (tmp_buf)
+            memcpy( tmp_buf, ptr, size );
+            void *anon_ptr = mmap( ptr, size, PROT_READ | PROT_WRITE,
+                                   MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0 );
+            if (anon_ptr != MAP_FAILED)
             {
-                memcpy( tmp_buf, ptr, size );
-                void *anon_ptr = mmap( ptr, size, PROT_READ | PROT_WRITE,
-                                       MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0 );
-                if (anon_ptr != MAP_FAILED)
-                {
-                    memcpy( anon_ptr, tmp_buf, size );
-                    free( tmp_buf );
-                    if (mprotect( anon_ptr, size, unix_prot ) == 0)
-                        goto noexec_ok;
-                }
-                else
-                {
-                    free( tmp_buf );
-                }
+                memcpy( anon_ptr, tmp_buf, size );
+                free( tmp_buf );
+                if (mprotect( anon_ptr, size, unix_prot ) == 0)
+                    return 0;
+            }
+            else
+            {
+                free( tmp_buf );
             }
         }
-        ERR( "failed to set %08x protection on %s section %s, noexec filesystem?\\n","""
+    }
+    return -1;
+}
+'''
 
-# Try targeted string replace first
-old_target = """if (mprotect( ptr, size, unix_prot ) == -1)
-    {
-        ERR( "failed to set %08x protection on %s section %s, noexec filesystem?\\n","""
+for file_path in wine_dir.rglob("virtual.c"):
+    try:
+        content = file_path.read_text(encoding="utf-8")
+    except Exception:
+        continue
 
-if old_target in content:
-    content = content.replace(old_target, replacement_code, 1)
-    # Also add the noexec_ok label right after the if-block closes
-    # Find the closing brace of the error block
-    idx = content.find(replacement_code)
-    if idx != -1:
-        end_idx = content.find("return STATUS_INVALID_IMAGE_FORMAT;\n    }", idx)
-        if end_idx != -1:
-            closing = "return STATUS_INVALID_IMAGE_FORMAT;\n    }"
-            content = content[:end_idx] + closing + "\n    noexec_ok: ;" + content[end_idx + len(closing):]
-            print("Successfully applied noexec fallback via exact string match")
-else:
-    # Regex fallback
-    pattern = r'if\s*\(\s*mprotect\s*\(\s*(\w+)\s*,\s*(\w+)\s*,\s*(\w+)\s*\)\s*==\s*-1\s*\)\s*\{\s*ERR\s*\(\s*"failed to set [^"]*noexec filesystem[^"]*"\s*,'
-    match = re.search(pattern, content)
-    if match:
-        p_var, s_var, u_var = match.group(1), match.group(2), match.group(3)
-        dynamic_repl = f"""if (mprotect( {p_var}, {s_var}, {u_var} ) == -1)
-    {{
-        /* Android noexec fallback: convert file-backed mapping to anonymous memory */
-        if ((errno == EACCES || errno == EPERM) && ({u_var} & PROT_EXEC))
-        {{
-            void *tmp_buf = malloc( {s_var} );
-            if (tmp_buf)
-            {{
-                memcpy( tmp_buf, {p_var}, {s_var} );
-                void *anon_ptr = mmap( {p_var}, {s_var}, PROT_READ | PROT_WRITE,
-                                       MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0 );
-                if (anon_ptr != MAP_FAILED)
-                {{
-                    memcpy( anon_ptr, tmp_buf, {s_var} );
-                    free( tmp_buf );
-                    if (mprotect( anon_ptr, {s_var}, {u_var} ) == 0)
-                        goto noexec_ok;
-                }}
-                else
-                {{
-                    free( tmp_buf );
-                }}
-            }}
-        }}
-        ERR( "failed to set %08x protection on %s section %s, noexec filesystem?\\n","""
-        content = content[:match.start()] + dynamic_repl + content[match.end():]
-        # Insert label after closing brace
-        idx = content.find(dynamic_repl)
-        end_idx = content.find("STATUS_INVALID_IMAGE_FORMAT;\n    }", idx)
-        if end_idx != -1:
-            closing = "STATUS_INVALID_IMAGE_FORMAT;\n    }"
-            content = content[:end_idx] + closing + "\n    noexec_ok: ;" + content[end_idx + len(closing):]
-            print("Successfully applied noexec fallback via regex match")
+    if "noexec filesystem" in content or "map_image_into_view" in content:
+        print(f"Found virtual.c target: {file_path}")
+
+        if "android_mprotect" in content:
+            print(f"Already patched: {file_path}")
+            patched_count += 1
+            continue
+
+        # Add helper function at the top after includes
+        # Find last #include
+        includes = list(re.finditer(r'#include\s+[<"][^>"]+[>"]', content))
+        if includes:
+            last_inc = includes[-1]
+            insert_pos = last_inc.end()
+            new_content = content[:insert_pos] + "\n" + helper_code + "\n" + content[insert_pos:]
         else:
-            print("WARNING: Could not find error return block for label insertion")
-    else:
-        print("ERROR: Could not find mprotect with noexec filesystem in virtual.c", file=sys.stderr)
-        sys.exit(1)
+            new_content = helper_code + "\n" + content
 
-if content != original:
-    virtual_c.write_text(content, encoding="utf-8")
-    print(f"Saved patched {virtual_c}")
-else:
-    print("No changes made to virtual.c", file=sys.stderr)
+        # Replace mprotect calls with android_mprotect
+        new_content = new_content.replace("mprotect(", "android_mprotect(")
+        # In our helper itself, we need the real mprotect!
+        # Fix the recursive call in helper_code
+        new_content = new_content.replace(
+            "if (android_mprotect( ptr, size, unix_prot ) == 0) return 0;",
+            "if (mprotect( ptr, size, unix_prot ) == 0) return 0;"
+        ).replace(
+            "if (android_mprotect( anon_ptr, size, unix_prot ) == 0)",
+            "if (mprotect( anon_ptr, size, unix_prot ) == 0)"
+        )
+
+        file_path.write_text(new_content, encoding="utf-8")
+        patched_count += 1
+        print(f"Successfully patched {file_path} with android_mprotect wrapper")
+
+print(f"Total files patched: {patched_count}")
+if patched_count == 0:
+    print("WARNING: No virtual.c found with target strings. Searching all .c files...")
+    for file_path in wine_dir.rglob("*.c"):
+        try:
+            content = file_path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        if "noexec filesystem" in content:
+            print(f"Found candidate: {file_path}")
+            # Patch candidate
+            includes = list(re.finditer(r'#include\s+[<"][^>"]+[>"]', content))
+            insert_pos = includes[-1].end() if includes else 0
+            new_content = content[:insert_pos] + "\n" + helper_code + "\n" + content[insert_pos:]
+            new_content = new_content.replace("mprotect(", "android_mprotect(")
+            new_content = new_content.replace(
+                "if (android_mprotect( ptr, size, unix_prot ) == 0) return 0;",
+                "if (mprotect( ptr, size, unix_prot ) == 0) return 0;"
+            ).replace(
+                "if (android_mprotect( anon_ptr, size, unix_prot ) == 0)",
+                "if (mprotect( anon_ptr, size, unix_prot ) == 0)"
+            )
+            file_path.write_text(new_content, encoding="utf-8")
+            patched_count += 1
+            print(f"Successfully patched {file_path}")
+
+if patched_count == 0:
+    print("Error: Could not locate any Wine source file with noexec filesystem", file=sys.stderr)
     sys.exit(1)
