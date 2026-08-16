@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Patch Wine's dlls/ntdll/unix/virtual.c with an Android-compatible mprotect wrapper.
+"""Patch Wine's dlls/ntdll/unix/virtual.c with an Android-compatible mprotect wrapper for PE loading.
 
 On Android, /data is mounted with SELinux policies that prevent file-backed mprotect(PROT_EXEC).
 When Wine loads a PE image (ntdll.dll, kernel32.dll, apps), setting PROT_EXEC fails.
@@ -8,7 +8,6 @@ We define android_mprotect() which falls back to remapping the section as MAP_AN
 and copying the contents, which Android allows PROT_EXEC on.
 """
 import pathlib
-import re
 import sys
 
 wine_dir = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "third_party/hangover/wine")
@@ -19,6 +18,18 @@ if not wine_dir.is_dir():
 patched_count = 0
 
 helper_code = '''
+#include <errno.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
+#ifndef MAP_ANONYMOUS
+#ifdef MAP_ANON
+#define MAP_ANONYMOUS MAP_ANON
+#else
+#define MAP_ANONYMOUS 0x20
+#endif
+#endif
+
 /* Android W^X / noexec filesystem compatibility wrapper */
 static inline int android_mprotect( void *ptr, size_t size, int unix_prot )
 {
@@ -54,7 +65,7 @@ for file_path in wine_dir.rglob("virtual.c"):
     except Exception:
         continue
 
-    if "noexec filesystem" in content or "map_image_into_view" in content:
+    if "noexec filesystem" in content:
         print(f"Found virtual.c target: {file_path}")
 
         if "android_mprotect" in content:
@@ -62,58 +73,24 @@ for file_path in wine_dir.rglob("virtual.c"):
             patched_count += 1
             continue
 
-        # Add helper function at the top after includes
-        # Find last #include
-        includes = list(re.finditer(r'#include\s+[<"][^>"]+[>"]', content))
-        if includes:
-            last_inc = includes[-1]
-            insert_pos = last_inc.end()
-            new_content = content[:insert_pos] + "\n" + helper_code + "\n" + content[insert_pos:]
-        else:
-            new_content = helper_code + "\n" + content
+        # Find position of "noexec filesystem"
+        pos = content.find("noexec filesystem")
+        mprot_pos = content.rfind("mprotect(", 0, pos)
+        if mprot_pos == -1:
+            print(f"Error: Could not find mprotect before 'noexec filesystem' in {file_path}", file=sys.stderr)
+            continue
 
-        # Replace mprotect calls with android_mprotect
-        new_content = new_content.replace("mprotect(", "android_mprotect(")
-        # In our helper itself, we need the real mprotect!
-        # Fix the recursive call in helper_code
-        new_content = new_content.replace(
-            "if (android_mprotect( ptr, size, unix_prot ) == 0) return 0;",
-            "if (mprotect( ptr, size, unix_prot ) == 0) return 0;"
-        ).replace(
-            "if (android_mprotect( anon_ptr, size, unix_prot ) == 0)",
-            "if (mprotect( anon_ptr, size, unix_prot ) == 0)"
-        )
+        # Replace ONLY that specific mprotect call
+        new_content = content[:mprot_pos] + "android_mprotect(" + content[mprot_pos + len("mprotect("):]
+
+        # Insert helper_code at top of file
+        new_content = helper_code + "\n" + new_content
 
         file_path.write_text(new_content, encoding="utf-8")
         patched_count += 1
-        print(f"Successfully patched {file_path} with android_mprotect wrapper")
+        print(f"Successfully targeted and patched map_image_into_view in {file_path}")
 
 print(f"Total files patched: {patched_count}")
 if patched_count == 0:
-    print("WARNING: No virtual.c found with target strings. Searching all .c files...")
-    for file_path in wine_dir.rglob("*.c"):
-        try:
-            content = file_path.read_text(encoding="utf-8")
-        except Exception:
-            continue
-        if "noexec filesystem" in content:
-            print(f"Found candidate: {file_path}")
-            # Patch candidate
-            includes = list(re.finditer(r'#include\s+[<"][^>"]+[>"]', content))
-            insert_pos = includes[-1].end() if includes else 0
-            new_content = content[:insert_pos] + "\n" + helper_code + "\n" + content[insert_pos:]
-            new_content = new_content.replace("mprotect(", "android_mprotect(")
-            new_content = new_content.replace(
-                "if (android_mprotect( ptr, size, unix_prot ) == 0) return 0;",
-                "if (mprotect( ptr, size, unix_prot ) == 0) return 0;"
-            ).replace(
-                "if (android_mprotect( anon_ptr, size, unix_prot ) == 0)",
-                "if (mprotect( anon_ptr, size, unix_prot ) == 0)"
-            )
-            file_path.write_text(new_content, encoding="utf-8")
-            patched_count += 1
-            print(f"Successfully patched {file_path}")
-
-if patched_count == 0:
-    print("Error: Could not locate any Wine source file with noexec filesystem", file=sys.stderr)
+    print("Error: Could not locate any Wine source file with 'noexec filesystem'", file=sys.stderr)
     sys.exit(1)
