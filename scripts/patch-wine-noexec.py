@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Patch Wine's virtual.c to handle Android noexec filesystem on PE sections."""
 import pathlib
+import re
 import sys
 
 wine_dir = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "third_party/hangover/wine").resolve()
@@ -11,6 +12,18 @@ if not wine_dir.is_dir():
     sys.exit(1)
 
 helper_fn = '''
+#include <errno.h>
+#include <string.h>
+#include <sys/mman.h>
+
+#ifndef MAP_ANONYMOUS
+#ifdef MAP_ANON
+#define MAP_ANONYMOUS MAP_ANON
+#else
+#define MAP_ANONYMOUS 0x20
+#endif
+#endif
+
 static int android_mprotect( void *ptr, size_t size, int unix_prot )
 {
     if (mprotect( ptr, size, unix_prot ) == 0) return 0;
@@ -62,10 +75,17 @@ for file_path in wine_dir.rglob("*.[ch]"):
         if m_idx != -1:
             # Replace mprotect with android_mprotect
             new_content = content[:m_idx] + "android_mprotect" + content[m_idx + len("mprotect"):]
-            # Insert helper_fn at top of file
-            new_content = helper_fn + "\n" + new_content
+
+            # Find the last #include in the file to insert helper_fn safely
+            includes = list(re.finditer(r'#include\s+[<"][^>"]+[>"]', new_content))
+            if includes:
+                insert_pos = includes[-1].end()
+                new_content = new_content[:insert_pos] + "\n" + helper_fn + "\n" + new_content[insert_pos:]
+            else:
+                new_content = helper_fn + "\n" + new_content
+
             file_path.write_text(new_content, encoding="utf-8")
             patched_count += 1
-            print(f"[patch-wine-noexec] Successfully patched {file_path} (mprotect at index {m_idx})")
+            print(f"[patch-wine-noexec] Successfully patched {file_path} (mprotect replaced & helper inserted after includes)")
 
 print(f"[patch-wine-noexec] Total files patched: {patched_count}")
