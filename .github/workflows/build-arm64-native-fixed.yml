@@ -1,0 +1,197 @@
+name: Build ARM64 Winlator - Fixed Runtime
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'feature/*'
+      - 'feature/**'
+
+permissions:
+  contents: read
+
+jobs:
+  runtime:
+    name: Build native ARM64 Wine runtime
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout Project1
+        uses: actions/checkout@v4
+
+      - name: Clone Hangover
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch master https://github.com/AndreRH/hangover.git third_party/hangover
+          git -C third_party/hangover submodule update --init --recursive --depth 1
+          test -x third_party/hangover/wine/configure
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources || true
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang lld flex bison gettext pkg-config python3 curl xz-utils zstd file patchelf
+          sudo apt-get build-dep -y wine || true
+
+      - name: Install llvm-mingw
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=20260616
+          host=ubuntu-22.04-aarch64
+          archive="llvm-mingw-${version}-ucrt-${host}.tar.xz"
+          mkdir -p toolchains
+          curl -fL --retry 3 "https://github.com/mstorsjo/llvm-mingw/releases/download/${version}/${archive}" -o "toolchains/${archive}"
+          tar -xJf "toolchains/${archive}" -C toolchains
+          root="$PWD/toolchains/llvm-mingw-${version}-ucrt-${host}"
+          echo "${root}/bin" >> "$GITHUB_PATH"
+          test -x "${root}/bin/aarch64-w64-mingw32-clang"
+          test -x "${root}/bin/arm64ec-w64-mingw32-clang"
+          test -x "${root}/bin/i686-w64-mingw32-clang"
+
+      - name: Verify compilers
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v gcc
+          command -v clang
+          command -v aarch64-w64-mingw32-clang
+          printf 'int main(void){return 0;}\n' >/tmp/host.c
+          gcc /tmp/host.c -o /tmp/host
+          /tmp/host
+          aarch64-w64-mingw32-clang /tmp/host.c -o /tmp/arm64.exe
+          file /tmp/arm64.exe
+
+      - name: Configure Hangover Wine
+        working-directory: third_party/hangover/wine
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          cd build
+          ../configure --disable-tests --with-mingw=clang --enable-archs=arm64ec,aarch64,i386
+
+      - name: Build Hangover Wine
+        working-directory: third_party/hangover/wine/build
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -j"$(nproc)"
+
+      - name: Stage and patch Android runtime
+        working-directory: third_party/hangover/wine/build
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$GITHUB_WORKSPACE/artifacts/rootfs"
+          mkdir -p "$GITHUB_WORKSPACE/artifacts/rootfs"
+          make DESTDIR="$GITHUB_WORKSPACE/artifacts/rootfs" install
+          ln -sf wine "$GITHUB_WORKSPACE/artifacts/rootfs/usr/local/bin/wine-arm64"
+          chmod +x "$GITHUB_WORKSPACE/scripts/patch-arm64-runtime.sh"
+          "$GITHUB_WORKSPACE/scripts/patch-arm64-runtime.sh" "$GITHUB_WORKSPACE/artifacts/rootfs"
+
+      - name: Package runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          tar --zstd -C artifacts/rootfs -cf artifacts/native_arm64_wine.tzst .
+          sha256sum artifacts/native_arm64_wine.tzst > artifacts/native_arm64_wine.sha256
+
+      - name: Upload runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-arm64-wine-runtime-fixed
+          path: |
+            artifacts/native_arm64_wine.tzst
+            artifacts/native_arm64_wine.sha256
+          retention-days: 14
+
+  apk:
+    name: Build Winlator APK with fixed native Wine
+    needs: runtime
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout Project1
+        uses: actions/checkout@v4
+
+      - name: Checkout Winlator app
+        uses: actions/checkout@v4
+        with:
+          repository: brunodev85/winlator-app
+          path: winlator-app
+          fetch-depth: 1
+
+      - name: Download native runtime
+        uses: actions/download-artifact@v4
+        with:
+          name: native-arm64-wine-runtime-fixed
+          path: runtime-artifact
+
+      - name: Install runtime asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p winlator-app/app/src/main/assets
+          cp runtime-artifact/native_arm64_wine.tzst winlator-app/app/src/main/assets/native_arm64_wine.tzst
+
+      - name: JDK 17 for Android SDK tools
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Configure Android SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/24.0.8215888" >> "$GITHUB_ENV"
+          echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager 'platform-tools' 'platforms;android-34' 'build-tools;34.0.0' 'ndk;24.0.8215888' 'cmake;3.22.1'
+
+      - name: JDK 11 for Gradle
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '11'
+          cache: gradle
+
+      - name: Initialize Winlator submodules
+        working-directory: winlator-app
+        shell: bash
+        run: git submodule update --init --recursive
+
+      - name: Apply Project1 overlays
+        shell: bash
+        run: bash scripts/apply-winlator-overlay.sh
+
+      - name: Validate integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f winlator-app/app/src/main/assets/native_arm64_wine.tzst
+          grep -q 'NativeGuestDispatcher' winlator-app/app/src/main/java/com/winlator/xenvironment/components/GuestProgramLauncherComponent.java
+          grep -q 'native_arm64_wine.tzst' winlator-app/app/src/main/java/com/winlator/xenvironment/RootFSInstaller.java
+
+      - name: Build APK
+        working-directory: winlator-app
+        shell: bash
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_ROOT }}
+        run: |
+          set -euo pipefail
+          bash ./gradlew --no-daemon --stacktrace :app:assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: winlator-arm64-native-fixed-apk
+          path: winlator-app/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
