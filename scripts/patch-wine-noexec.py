@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""Patch Wine's dlls/ntdll/unix/virtual.c with an Android-compatible mprotect wrapper.
+"""Patch Wine's dlls/ntdll/unix/virtual.c to handle Android noexec filesystem on PE sections.
 
-On Android, /data is mounted with SELinux policies that prevent file-backed mprotect(PROT_EXEC).
+On Android, application storage (/data/data/com.winlator) blocks mprotect(PROT_EXEC)
+on file-backed mmap regions due to SELinux W^X policies.
+
 When Wine loads a PE image (ntdll.dll, kernel32.dll, apps), setting PROT_EXEC fails.
 
-We inject android_mprotect_compat() and a macro redirection after the last #include in virtual.c.
+This patch intercepts the mprotect failure in map_image_into_view, allocates a temporary
+anonymous page with mmap(NULL, size, ...), copies the PE section data, remaps the section
+at ptr with MAP_FIXED | MAP_ANONYMOUS, restores the data, and calls mprotect(PROT_EXEC).
 """
 import pathlib
-import re
 import sys
 
 wine_dir = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "third_party/hangover/wine")
@@ -17,52 +20,28 @@ if not wine_dir.is_dir():
 
 patched_count = 0
 
-wrapper_block = '''
-/* --- BEGIN ANDROID NOEXEC / W^X COMPATIBILITY WRAPPER --- */
-#include <errno.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/mman.h>
-
-#ifndef MAP_ANONYMOUS
-#ifdef MAP_ANON
-#define MAP_ANONYMOUS MAP_ANON
-#else
-#define MAP_ANONYMOUS 0x20
-#endif
-#endif
-
-static inline int android_mprotect_compat( void *ptr, size_t size, int unix_prot )
-{
-    if ((mprotect)( ptr, size, unix_prot ) == 0) return 0;
-    if ((errno == EACCES || errno == EPERM) && (unix_prot & PROT_EXEC))
-    {
-        void *tmp_buf = malloc( size );
-        if (tmp_buf)
+noexec_fallback = """
+        if ((errno == EACCES || errno == EPERM) && (unix_prot & PROT_EXEC))
         {
-            memcpy( tmp_buf, ptr, size );
-            void *anon_ptr = mmap( ptr, size, PROT_READ | PROT_WRITE,
-                                   MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0 );
-            if (anon_ptr != MAP_FAILED)
+            void *tmp_buf = mmap( NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0 );
+            if (tmp_buf != MAP_FAILED)
             {
-                memcpy( anon_ptr, tmp_buf, size );
-                free( tmp_buf );
-                if ((mprotect)( anon_ptr, size, unix_prot ) == 0)
-                    return 0;
+                memcpy( tmp_buf, ptr, size );
+                void *anon_ptr = mmap( ptr, size, PROT_READ | PROT_WRITE,
+                                       MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0 );
+                if (anon_ptr != MAP_FAILED)
+                {
+                    memcpy( anon_ptr, tmp_buf, size );
+                    munmap( tmp_buf, size );
+                    if (mprotect( anon_ptr, size, unix_prot ) == 0)
+                        goto noexec_ok;
+                }
+                else
+                {
+                    munmap( tmp_buf, size );
+                }
             }
-            else
-            {
-                free( tmp_buf );
-            }
-        }
-    }
-    return -1;
-}
-
-#undef mprotect
-#define mprotect(a, b, c) android_mprotect_compat((a), (b), (c))
-/* --- END ANDROID NOEXEC / W^X COMPATIBILITY WRAPPER --- */
-'''
+        }"""
 
 for file_path in wine_dir.rglob("virtual.c"):
     try:
@@ -70,28 +49,53 @@ for file_path in wine_dir.rglob("virtual.c"):
     except Exception:
         continue
 
-    if "android_mprotect_compat" in content:
-        print(f"Already patched: {file_path}")
+    if "noexec filesystem" in content:
+        print(f"Found virtual.c target: {file_path}")
+
+        if "noexec_ok" in content:
+            print(f"Already patched: {file_path}")
+            patched_count += 1
+            continue
+
+        # Find the error string
+        pos = content.find("noexec filesystem")
+        # Find the preceding if (mprotect(
+        mprot_pos = content.rfind("if (mprotect(", 0, pos)
+        if mprot_pos == -1:
+            print(f"Could not find if (mprotect( before 'noexec filesystem' in {file_path}")
+            continue
+
+        # Find the opening brace after if (mprotect(...)
+        brace_pos = content.find("{", mprot_pos)
+        if brace_pos == -1 or brace_pos > pos:
+            print(f"Could not find opening brace for mprotect error block in {file_path}")
+            continue
+
+        # Find the closing brace of the error block (after return STATUS_INVALID_IMAGE_FORMAT;)
+        ret_pos = content.find("STATUS_INVALID_IMAGE_FORMAT;", pos)
+        if ret_pos == -1:
+            print(f"Could not find STATUS_INVALID_IMAGE_FORMAT in {file_path}")
+            continue
+
+        close_brace_pos = content.find("}", ret_pos)
+        if close_brace_pos == -1:
+            print(f"Could not find closing brace for error block in {file_path}")
+            continue
+
+        # Insert fallback right after the opening brace and label after closing brace
+        new_content = (
+            content[:brace_pos + 1]
+            + noexec_fallback
+            + content[brace_pos + 1:close_brace_pos + 1]
+            + "\n    noexec_ok: ;"
+            + content[close_brace_pos + 1:]
+        )
+
+        file_path.write_text(new_content, encoding="utf-8")
         patched_count += 1
-        continue
-
-    print(f"Found target virtual.c: {file_path}")
-
-    # Find the last #include in the file
-    matches = list(re.finditer(r'#include\s+[<"][^>"]+[>"]', content))
-    if not matches:
-        print(f"Error: No #include found in {file_path}", file=sys.stderr)
-        continue
-
-    last_include = matches[-1]
-    insert_pos = last_include.end()
-
-    new_content = content[:insert_pos] + "\n" + wrapper_block + "\n" + content[insert_pos:]
-    file_path.write_text(new_content, encoding="utf-8")
-    patched_count += 1
-    print(f"Successfully injected android_mprotect_compat into {file_path}")
+        print(f"Successfully patched {file_path} with direct mmap anonymous fallback")
 
 print(f"Total files patched: {patched_count}")
 if patched_count == 0:
-    print("Error: Could not locate any virtual.c in Wine source", file=sys.stderr)
+    print("Error: Could not patch virtual.c", file=sys.stderr)
     sys.exit(1)
